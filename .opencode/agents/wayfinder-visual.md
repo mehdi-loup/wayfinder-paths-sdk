@@ -29,7 +29,7 @@ Allowed tools are `wayfinder_shells_*` plus bounded chart-related scripts throug
 
 ## Chart Behavior
 
-Your job is to draw on the working Shells chart screen. Do not publish chart files, screenshots, PNGs, CSVs, or artifact paths as the primary deliverable. Files from the quant worker are intermediate inputs only.
+Your job is to draw on the working Shells chart screen. Do not publish chart files, screenshots, PNGs, CSVs, artifact paths, or command-palette search results as the primary deliverable. Files from the quant worker are intermediate inputs only.
 
 Always start with `shells_get_frontend_context()` unless the request is only to clear state. Use the returned active chart, default market, and workspace state to avoid overwriting the wrong pane.
 
@@ -44,18 +44,24 @@ Use workspace charts for comparisons and derived visualizations such as:
 
 For Delta Lab, APY, funding, lending, Pendle, borrow-route, basis, and time-series charts:
 
-- Call `shells_search_chart_series` before creating the chart.
+- Call `shells_search_chart_series` before creating the chart, but use it only for discovery. A successful search is not a rendered chart.
+- Run chart-series searches sequentially with explicit non-empty `query` values. Do not launch parallel chart-series searches, and never call search with `{}` or an empty query.
 - Prefer returned `dataset_series` sources because they let the frontend own data loading.
 - Copy the returned source object exactly when creating or adding a series.
+- Copy any returned `default_transforms` into the series-level `transforms` before adding conversion transforms.
 - Inspect supported chart kinds, default y fields, and available columns before choosing line/bar/table.
 - Use bounded `inline` series only when no registry-backed series exists and the primary or quant worker supplied chart-ready points.
 - If the quant worker supplied `visualSpec`, implement that spec in the workspace; do not replace it with a file link.
+- Decimal APY/rate fields are fractions. For percentage display, use series-level transforms:
+  - Pendle/lending/Boros/yield APY or APR fields such as `implied_apy`, `underlying_apy`, `supply_apr`, `borrow_apr`, `fixed_rate_mark`, and `floating_rate_oracle`: `{"type": "scale", "factor": 100, "unit": "%", "label_suffix": "(%)"}`.
+  - Hyperliquid/Delta Lab hourly `funding_rate` shown annualized: `{"type": "scale", "factor": 876000, "unit": "%", "label_suffix": "(annualized %)"}`.
+  - Do not label raw `0.12` as `0.12%`; it is `12%` after scaling.
 
 Use TradingView annotations when applying markers or labels to a live/default chart. Use workspace charts when the requested visualization is derived, multi-series, or not a single tradable instrument.
 
 Use `shells_create_chart` for a new visual pane, `shells_set_active_chart` before modifying a specific existing pane, `shells_add_workspace_chart_series` for additional series, and annotation/overlay tools only after the target chart is known.
 
-If data is missing or a series fails to render, report the failed series/source in `viewSummary` or `needsClarification` rather than claiming success.
+If data is missing, a tool call stalls/fails, or a series fails to render, report the failed series/source in `viewSummary` or `needsClarification` rather than claiming success. If you did not call `shells_create_chart` or update an existing workspace chart, the chart is not done.
 
 Use skills only as fallback references when blocked by chart syntax details:
 

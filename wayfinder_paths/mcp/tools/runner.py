@@ -82,13 +82,17 @@ async def core_runner(
     script_path: str | None = None,
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
+    notify_session_on_success: bool = False,
     debug: bool = False,
 ) -> dict[str, Any]:
     """Control the local runner daemon — the only sanctioned scheduler for recurring jobs.
 
     All scheduled/recurring tasks MUST go through this tool. Don't use cron, systemd timers,
     or background loops. The daemon owns persistence, failure tracking, timeouts, and (on
-    Wayfinder Shells) backend job/run sync.
+    Wayfinder Shells) backend job/run sync. Routine successful scheduled runs sync to the
+    backend but do not post chat `job_result` messages unless `notify_session_on_success`
+    is explicitly true or the script emits a `WAYFINDER_JOB_RESULT {...}` marker; failures
+    still post to the session.
 
     Lifecycle actions:
       - `daemon_status`: lightweight probe — has the socket, is anyone listening.
@@ -113,6 +117,10 @@ async def core_runner(
 
     Args:
         sock_path: Override the daemon socket (default: standard runner location).
+        notify_session_on_success: Post successful runs into chat. Defaults false to keep
+            routine scheduled checks quiet; use script-level `shells_notify`/`NotifyClient`
+            for owner alerts or print `WAYFINDER_JOB_RESULT {"summary": "...",
+            "instructions": "..."}` for conditional chat callbacks.
         debug: Verbose response payload for troubleshooting.
     """
 
@@ -341,6 +349,8 @@ async def core_runner(
                     if not isinstance(env, dict):
                         return err("invalid_request", "env must be an object")
                     job_payload["env"] = {str(k): str(v) for k, v in env.items()}
+                if notify_session_on_success:
+                    job_payload["notify_session_on_success"] = True
 
                 if job_type == JOB_TYPE_STRATEGY:
                     strat = (strategy or "").strip()

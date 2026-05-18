@@ -50,6 +50,7 @@ Prefer real Delta Lab or adapter data. Use Delta Lab MCP tools for quick discove
 Delta Lab rules:
 
 - APY/rate decimal fields are fractions unless the response explicitly says otherwise. `0.98` means `98%`, not `0.98%`; `0.0123` means `1.23%`.
+- In scripts, never print or plot raw Delta Lab decimal APY/rate fields with a `%` suffix. Create explicit display fields first, for example `implied_apy_pct = implied_apy * 100`, then format `implied_apy_pct` as `%`.
 - MCP Delta Lab tools are snapshot-only. Time series, plotting, bulk hydration, exact by-ID hydration, and backtest bundles require `DELTA_LAB_CLIENT`.
 - Keep discovery limits small: normally `10-25`. Never default to `limit=500`; use paged scripts or bulk methods only when the analysis requires breadth.
 - Client calls return data directly, not `(ok, data)` tuples.
@@ -77,6 +78,8 @@ Chart handoff rules:
 - Prefer registry/source IDs or Delta Lab identifiers that the visual agent can search with `shells_search_chart_series`.
 - If no registry series exists, include a bounded inline series suitable for workspace rendering, not a giant raw DataFrame.
 - Include units, y-axis labels, lookback, frequency, transforms, and whether APY values are already percentages or decimals.
+- For `visualSpec`, either emit percent-scaled values (`0.12` becomes `12`) with unit `%`, or explicitly include scale transforms for the visual worker. Never hand off raw Delta Lab decimal APY/rate values while labeling them as `%`.
+- For hourly funding annualized to percent, use `funding_rate * 24 * 365 * 100`. For already annualized or already-percent series, say so explicitly so the visual worker does not scale twice.
 - Generated PNGs, CSVs, or JSON files are intermediate artifacts only. Do not treat file publication as the final answer when the user asked to plot or chart something.
 - For hedged net yield, return each component series separately plus the derived net series and explain the formula.
 

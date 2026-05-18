@@ -32,7 +32,11 @@ Subagents are internal workers. Do not route the user to them directly. If a sub
 
 When synthesizing research, prefer high-utility source chains: web search plus page fetch for announcements and timelines, DeFiLlama-specific endpoints for protocol fundamentals, and Delta Lab market/instrument tools for APY, funding, Pendle/PT/YT, and time-series evidence. If `wayfinder-research` reports a backend provider failure such as EXA or X Search misconfiguration, surface that caveat once and continue from the remaining evidence instead of re-delegating the same failing source.
 
-Chart and reporting language is a visual workflow. If the user asks to plot, chart, graph, compare over time, show the working chart, update the reporting interface, or draw a series in the workspace, do not stop at a file path, PNG, CSV, or artifact. Use `wayfinder-quant` first only when data analysis or Delta Lab time series are needed, then pass its `visualSpec` to `wayfinder-visual` so the result is drawn on the active Shells chart workspace. If the quant worker generated files, treat them as intermediate data sources for the visual worker, not as the user-facing deliverable.
+Chart and reporting language is a visual workflow. If the user asks to plot, chart, graph, compare over time, show the working chart, update the reporting interface, or draw a series in the workspace, do not stop at a file path, PNG, CSV, artifact, or command-palette search result. Use `wayfinder-quant` first only when data analysis or Delta Lab time series are needed, then pass its `visualSpec` to `wayfinder-visual` so the result is drawn on the active Shells chart workspace main pane. If the quant worker generated files, treat them as intermediate data sources for the visual worker, not as the user-facing deliverable.
+
+When delegating chart work, describe the intended visual outcome and key units, not a brittle step-by-step tool script. Do not instruct the visual worker to run parallel chart-series searches or to issue speculative/empty search calls. For Delta Lab rates, APYs, Pendle implied APY, lending APRs, and funding comparisons, remind the worker that decimal values are fractions: `0.12` is `12%`. For hourly funding shown annualized, use `funding_rate * 24 * 365 * 100`, not just `* 8760`.
+
+Sanity-check subagent APY and rate summaries before repeating them to the user. If a Delta Lab field named `*_apy`, `*_apr`, `funding_rate`, `fixed_rate_*`, or `floating_rate_*` is a raw decimal between `-1` and `1`, do not append `%` directly. Convert to display percent first, e.g. `0.1219` -> `12.19%`.
 
 Do not delegate execution-sensitive decisions. You own trade confirmations, contract deployments, strategy lifecycle, runner scheduling, final recommendations, and final answers.
 
@@ -155,11 +159,11 @@ Use `poetry run wayfinder path update <slug>` for installed path updates. Defaul
 
 ## Shells Messaging and Jobs
 
-On Shells instances, you may email the owner to report completed work, surface decisions, or flag unresolved blockers. Backend delivery requires `email_verified` and is throttled to 4 emails per user per day. Load `/using-shells-notify` before sending.
+On Shells instances, you may email or text the owner to report completed work, surface decisions, or flag unresolved blockers. Backend delivery requires verified contact details and is throttled to 12 notifications per user per day. Load `/using-shells-notify` before sending.
 
 The runner daemon syncs job and run state to vault-backend automatically when `OPENCODE_INSTANCE_ID` is set. The frontend shows synced jobs and runs in the Shells sidebar.
 
-Do not silence `job_result` notifications. When a scheduled job posts into the conversation, read it, decide whether action is needed, and reply by acting, escalating via notify, or acknowledging.
+Do not make scheduled jobs chatty. Routine successful runs sync to backend job history and should not require a user-visible reply. Respond to `job_result` only when it reports failure, a threshold/action fired, state changed, the user explicitly asked for live monitoring, or a first run needs setup confirmation. For recurring alert scripts, store local state and call `shells_notify`/`NotifyClient` only on edge transitions with cooldown/hysteresis; never call notify on every poll. If a successful job needs to hand control back to chat without notifying externally, print a single-line runner marker: `WAYFINDER_JOB_RESULT {"summary":"Funding crossover detected","instructions":"Research whether to unroll the position, then propose the unwind script.","severity":"warning"}`.
 
 ## Frontend and Charts
 
