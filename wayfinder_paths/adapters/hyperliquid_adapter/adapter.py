@@ -1436,113 +1436,52 @@ class HyperliquidAdapter(BaseAdapter):
         timeout_s: int = 120,
         poll_interval_s: int = 5,
     ) -> tuple[bool, float]:
+        """Wait until unified USDC reflects a fresh Bridge2 deposit.
+
+        Returns `(True, post-credit_balance)` once spot USDC crosses
+        `initial + 0.95 * expected_increase`, or `(False, latest)` on timeout.
+
+        Polls the spot balance directly. We intentionally do NOT short-circuit
+        on `user_non_funding_ledger_updates` (the deposit ledger event) — HL
+        writes that record a few seconds before the unified balance reflects
+        the credit, so the returned balance would understate available funds.
+        """
         timeout_s = max(0, int(timeout_s))
         poll_interval_s = max(1, int(poll_interval_s))
-        iterations = int(timeout_s // poll_interval_s) + 1
 
-        # UnifiedAccount mode: USDC sits in spotClearinghouseState (perp
-        # marginSummary.accountValue is meaningless for unified users).
-        def _usdc_from_spot(state: dict[str, Any]) -> float:
-            for bal in state.get("balances") or []:
-                if bal.get("coin") == "USDC":
-                    return float(bal.get("total") or 0.0)
-            return 0.0
-
-        success, initial_state = await self.get_spot_user_state(address)
-        if not success:
-            self.logger.warning(f"Could not fetch initial spot state: {initial_state}")
-            initial_balance = 0.0
-        else:
-            initial_balance = _usdc_from_spot(initial_state)
-
-        self.logger.info(
-            f"Waiting for Hyperliquid deposit. Initial balance: ${initial_balance:.2f}, "
-            f"expecting +${expected_increase:.2f}"
-        )
-
-        # Also check ledger in case deposit already credited before this call
-        started_ms = int(time.time() * 1000)
-        from_timestamp_ms = started_ms - (timeout_s * 1000)
-        expected_min = float(expected_increase) * 0.95
-
-        ok_ledger, deposits = await self.get_user_deposits(address, from_timestamp_ms)
-        if ok_ledger and any(float(v or 0) >= expected_min for v in deposits.values()):
-            self.logger.info("Hyperliquid deposit confirmed via ledger updates.")
-            success, state = await self.get_spot_user_state(address)
-            current = _usdc_from_spot(state) if success else initial_balance
-            return True, float(current)
-
-        for i in range(iterations):
-            if i > 0:
-                await asyncio.sleep(poll_interval_s)
-
+        async def _spot_usdc() -> float:
             success, state = await self.get_spot_user_state(address)
             if not success:
-                continue
+                return 0.0
+            for bal in state["balances"]:
+                if bal["coin"] == "USDC":
+                    return float(bal["total"])
+            return 0.0
 
-            current_balance = _usdc_from_spot(state)
-
-            # Allow 5% tolerance for fees/slippage
-            if current_balance >= initial_balance + expected_min:
-                self.logger.info(
-                    f"Hyperliquid deposit confirmed: ${current_balance - initial_balance:.2f} "
-                    f"(expected ${expected_increase:.2f})"
-                )
-                return True, current_balance
-
-            ok_ledger, deposits = await self.get_user_deposits(
-                address, from_timestamp_ms
-            )
-            if ok_ledger and any(
-                float(v or 0) >= expected_min for v in deposits.values()
-            ):
-                self.logger.info("Hyperliquid deposit confirmed via ledger updates.")
-                return True, float(current_balance)
-
-            remaining_s = (iterations - i - 1) * poll_interval_s
-            self.logger.debug(
-                f"Waiting for deposit... current=${current_balance:.2f}, "
-                f"need=${initial_balance + expected_increase:.2f}, {remaining_s}s remaining"
-            )
-
-        self.logger.warning(
-            f"Hyperliquid deposit not confirmed after {timeout_s}s. "
-            "Deposits typically credit in < 1 minute (but can take longer)."
+        initial = await _spot_usdc()
+        target = initial + float(expected_increase) * 0.95
+        self.logger.info(
+            f"Waiting for Hyperliquid deposit. Initial USDC: ${initial:.2f}, "
+            f"target ≥ ${target:.2f} (expecting +${expected_increase:.2f})."
         )
-        success, state = await self.get_spot_user_state(address)
-        final_balance = _usdc_from_spot(state) if success else initial_balance
-        return False, final_balance
 
-    async def get_user_deposits(
-        self,
-        address: str,
-        from_timestamp_ms: int,
-    ) -> tuple[bool, dict[str, float]]:
-        try:
-            data = get_info().user_non_funding_ledger_updates(
-                to_checksum_address(address), int(from_timestamp_ms)
-            )
-            result: dict[str, float] = {}
-            for update in sorted(data or [], key=lambda x: x.get("time", 0)):
-                delta = update.get("delta") or {}
-                if delta.get("type") == "deposit":
-                    tx_hash = (
-                        update.get("hash")
-                        or update.get("txHash")
-                        or update.get("tx_hash")
-                        or update.get("transactionHash")
-                    )
-                    usdc_amount = float(delta.get("usdc", 0))
-                    if not tx_hash:
-                        ts = int(update.get("time") or 0)
-                        tx_hash = f"deposit-{ts}-{len(result)}"
-                    result[str(tx_hash)] = usdc_amount
-
-            return True, result
-
-        except Exception as exc:
-            self.logger.error(f"Failed to get user deposits: {exc}")
-            return False, {}
+        deadline = time.monotonic() + timeout_s
+        while True:
+            current = await _spot_usdc()
+            if current >= target:
+                self.logger.info(
+                    f"Hyperliquid deposit confirmed: spot USDC ${current:.2f} "
+                    f"(+${current - initial:.2f}, expected +${expected_increase:.2f})"
+                )
+                return True, current
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    f"Hyperliquid deposit not confirmed after {timeout_s}s "
+                    f"(spot USDC ${current:.2f}, target ${target:.2f}). "
+                    "Deposits typically credit in < 1 minute but can take longer."
+                )
+                return False, current
+            await asyncio.sleep(poll_interval_s)
 
     async def get_user_withdrawals(
         self,
