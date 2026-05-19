@@ -1089,24 +1089,36 @@ async def hyperliquid_search_mid_prices(
     """
     Search Hyperliquid perpetual, spot, hip3 perpetual and hip4 outcome markets for current mid prices.
 
+    Returned keys are always the canonical market paths (`BTC-USDC`, `HYPE/USDC`,
+    `xyz:NVDA`, `#40`) regardless of whether `asset_names` is provided.
+
     asset_names: Canonical market paths to filter mid prices (e.g. "BTC-USDC", "xyz:NVDA",
         "KNTQ/USDH", "#40"), get these from hyperliquid_search_market(). If omitted, returns every market's mid price. Prefer non empty asset_names for efficiency.
     """
     adapter = HyperliquidAdapter()
     success, prices = await adapter.get_all_mid_prices()
-    if not asset_names:
-        return ok({"success": success, "prices": prices})
+    if asset_names:
+        filtered: dict[str, str] = {}
+        for name in asset_names:
+            asset_id = await adapter.get_asset_id(name)
+            if asset_id is None:
+                continue
+            for key in adapter.get_mid_price_key(name, asset_id):
+                if (mid := prices.get(key)) is not None:
+                    filtered[name] = mid
+                    break
+        return ok({"prices": filtered})
 
-    filtered: dict[str, str] = {}
-    for name in asset_names:
-        asset_id = await adapter.get_asset_id(name)
-        if asset_id is None:
-            continue
-        for key in adapter.get_mid_price_key(name, asset_id):
-            if (mid := prices.get(key)) is not None:
-                filtered[name] = mid
-                break
-    return ok({"prices": filtered})
+    # Rewrite raw allMids keys to canonical asset names so the response is
+    # interchangeable with every other tool's asset_name format. See
+    # HyperliquidAdapter.canonical_from_mid_price_key for the key grammar.
+    _, spot_map = await adapter.get_spot_assets()
+    spot_index_to_pair = {f"@{aid - 10000}": name for name, aid in spot_map.items()}
+    canonical = {
+        adapter.canonical_from_mid_price_key(key, spot_index_to_pair): mid
+        for key, mid in prices.items()
+    }
+    return ok({"success": success, "prices": canonical})
 
 
 @catch_errors

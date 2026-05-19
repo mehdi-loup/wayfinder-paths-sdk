@@ -622,6 +622,23 @@ class HyperliquidAdapter(BaseAdapter):
             case _:  # hip3, hip4 — already canonical
                 return [asset_name]
 
+    def canonical_from_mid_price_key(
+        self, raw_key: str, spot_index_to_pair: dict[str, str]
+    ) -> str:
+        """Inverse of `get_mid_price_key` — canonical asset name from a raw
+        `allMids` key.
+
+        Pass `spot_index_to_pair` built from `get_spot_assets()` (i.e.
+        `{f"@{aid-10000}": name}`). Spot indices not in the map (e.g. HIP-3-dex-
+        specific spot books) have no standard canonical name and are returned
+        unchanged.
+        """
+        if raw_key.startswith("@"):
+            return spot_index_to_pair.get(raw_key, raw_key)
+        if raw_key.startswith("#") or ":" in raw_key or "/" in raw_key:
+            return raw_key
+        return f"{raw_key}-USDC"
+
     def get_sz_decimals(self, asset_id: int) -> int:
         if asset_id >= OUTCOME_ASSET_OFFSET:
             return 0
