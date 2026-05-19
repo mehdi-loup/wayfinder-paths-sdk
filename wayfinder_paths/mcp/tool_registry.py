@@ -1,10 +1,9 @@
-"""Profile-aware Wayfinder MCP tool registry."""
+"""Wayfinder MCP tool registry."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
 from wayfinder_paths.core.config import is_opencode_instance
 from wayfinder_paths.mcp.tools.alpha_lab import (
@@ -98,141 +97,146 @@ from wayfinder_paths.mcp.tools.wallets import (
     onchain_get_wallet_activity,
 )
 
-MCPProfile = Literal["all", "main", "research", "visual"]
 ToolAccess = Literal["read", "execute", "schedule"]
 
-VALID_PROFILES: frozenset[str] = frozenset({"all", "main", "research", "visual"})
+_TOOL_ACCESS_ATTR = "_wayfinder_mcp_access"
+_OPENCODE_ONLY_ATTR = "_wayfinder_mcp_opencode_only"
 
 
-@dataclass(frozen=True)
-class ToolEntry:
-    profiles: frozenset[str]
-    fn: Callable[..., Any]
-    access: ToolAccess
-    name: str
-    opencode_only: bool = False
+def _set_tool_access[F: Callable[..., Any]](fn: F, access: ToolAccess) -> F:
+    setattr(fn, _TOOL_ACCESS_ATTR, access)
+    return fn
 
 
-def _entry(
-    profiles: str | Iterable[str],
-    fn: Callable[..., Any],
-    access: ToolAccess = "read",
-    name: str | None = None,
-    *,
-    opencode_only: bool = False,
-) -> ToolEntry:
-    if isinstance(profiles, str):
-        profile_set = frozenset({profiles})
-    else:
-        profile_set = frozenset(profiles)
-    return ToolEntry(
-        profiles=profile_set,
-        fn=fn,
-        access=access,
-        name=name or fn.__name__,
-        opencode_only=opencode_only,
-    )
+def readonly[F: Callable[..., Any]](fn: F) -> F:
+    return _set_tool_access(fn, "read")
 
 
-TOOL_REGISTRY: tuple[ToolEntry, ...] = (
+def execution_tool[F: Callable[..., Any]](fn: F) -> F:
+    return _set_tool_access(fn, "execute")
+
+
+def schedule_tool[F: Callable[..., Any]](fn: F) -> F:
+    return _set_tool_access(fn, "schedule")
+
+
+def opencode_only[F: Callable[..., Any]](fn: F) -> F:
+    setattr(fn, _OPENCODE_ONLY_ATTR, True)
+    return fn
+
+
+def _tool[F: Callable[..., Any]](fn: F, *decorators: Callable[[F], F]) -> F:
+    for decorator in decorators:
+        fn = decorator(fn)
+    return fn
+
+
+def tool_name(fn: Callable[..., Any]) -> str:
+    return fn.__name__
+
+
+def tool_access(fn: Callable[..., Any]) -> ToolAccess:
+    return cast(ToolAccess, getattr(fn, _TOOL_ACCESS_ATTR, "read"))
+
+
+def is_opencode_only_tool(fn: Callable[..., Any]) -> bool:
+    return bool(getattr(fn, _OPENCODE_ONLY_ATTR, False))
+
+
+TOOL_REGISTRY: tuple[Callable[..., Any], ...] = (
     # Main / operator / coding.
-    _entry("main", core_get_adapters_and_strategies),
-    _entry("main", core_get_wallets),
-    _entry("main", core_wallets),
-    _entry("main", onchain_get_wallet_activity),
-    _entry("main", onchain_resolve_token),
-    _entry("main", onchain_get_gas_token),
-    _entry("main", onchain_fuzzy_search_tokens),
-    _entry("main", onchain_quote_swap),
-    _entry("main", hyperliquid_get_state),
-    _entry("main", hyperliquid_search_market),
-    _entry("main", hyperliquid_search_mid_prices),
-    _entry("main", polymarket_read),
-    _entry("main", polymarket_get_state),
-    _entry("main", contracts_list),
-    _entry("main", contracts_get),
-    _entry("main", contracts_compile),
-    _entry("main", contracts_call),
-    _entry(("main", "research", "visual"), core_run_script, "execute"),
-    _entry("main", core_execute, "execute"),
-    _entry("main", hyperliquid_place_market_order, "execute"),
-    _entry("main", hyperliquid_place_limit_order, "execute"),
-    _entry("main", hyperliquid_place_trigger_order, "execute"),
-    _entry("main", hyperliquid_cancel_order, "execute"),
-    _entry("main", hyperliquid_update_leverage, "execute"),
-    _entry("main", hyperliquid_deposit, "execute"),
-    _entry("main", hyperliquid_withdraw, "execute"),
-    _entry("main", polymarket_deposit, "execute"),
-    _entry("main", polymarket_withdraw, "execute"),
-    _entry("main", polymarket_place_market_order, "execute"),
-    _entry("main", polymarket_place_limit_order, "execute"),
-    _entry("main", polymarket_cancel_order, "execute"),
-    _entry("main", polymarket_redeem_positions, "execute"),
-    _entry("main", contracts_deploy, "execute"),
-    _entry("main", contracts_execute, "execute"),
-    _entry("main", core_run_strategy, "execute"),
-    _entry("main", core_runner, "schedule"),
+    _tool(core_get_adapters_and_strategies),
+    _tool(core_get_wallets),
+    _tool(core_wallets),
+    _tool(onchain_get_wallet_activity),
+    _tool(onchain_resolve_token),
+    _tool(onchain_get_gas_token),
+    _tool(onchain_fuzzy_search_tokens),
+    _tool(onchain_quote_swap),
+    _tool(hyperliquid_get_state),
+    _tool(hyperliquid_search_market),
+    _tool(hyperliquid_search_mid_prices),
+    _tool(polymarket_read),
+    _tool(polymarket_get_state),
+    _tool(contracts_list),
+    _tool(contracts_get),
+    _tool(contracts_compile),
+    _tool(contracts_call),
+    _tool(core_run_script, execution_tool),
+    _tool(core_execute, execution_tool),
+    _tool(hyperliquid_place_market_order, execution_tool),
+    _tool(hyperliquid_place_limit_order, execution_tool),
+    _tool(hyperliquid_place_trigger_order, execution_tool),
+    _tool(hyperliquid_cancel_order, execution_tool),
+    _tool(hyperliquid_update_leverage, execution_tool),
+    _tool(hyperliquid_deposit, execution_tool),
+    _tool(hyperliquid_withdraw, execution_tool),
+    _tool(polymarket_deposit, execution_tool),
+    _tool(polymarket_withdraw, execution_tool),
+    _tool(polymarket_place_market_order, execution_tool),
+    _tool(polymarket_place_limit_order, execution_tool),
+    _tool(polymarket_cancel_order, execution_tool),
+    _tool(polymarket_redeem_positions, execution_tool),
+    _tool(contracts_deploy, execution_tool),
+    _tool(contracts_execute, execution_tool),
+    _tool(core_run_strategy, execution_tool),
+    _tool(core_runner, schedule_tool),
     # Research + Delta Lab + quant data access.
-    _entry("research", research_web_search),
-    _entry("research", research_web_fetch),
-    _entry("research", research_crypto_sentiment),
-    _entry("research", research_social_x_search),
-    _entry("research", research_defillama_free),
-    _entry("research", research_goldsky_graphql),
-    _entry("research", research_goldsky_search),
-    _entry("research", research_goldsky_schema),
-    _entry("research", research_get_alpha_types),
-    _entry("research", research_search_alpha),
-    _entry("research", research_get_basis_symbols),
-    _entry("research", research_get_basis_apy_sources),
-    _entry("research", research_get_top_apy),
-    _entry("research", research_get_asset_basis_info),
-    _entry("research", research_search_delta_lab_assets),
-    _entry("research", research_search_delta_lab_markets),
-    _entry("research", research_search_delta_lab_instruments),
-    _entry("research", research_get_delta_lab_pendle_market),
-    _entry("research", research_search_price),
-    _entry("research", research_search_lending),
-    _entry("research", research_search_perp),
-    _entry("research", research_search_borrow_routes),
-    _entry("research", core_get_adapters_and_strategies),
+    _tool(research_web_search),
+    _tool(research_web_fetch),
+    _tool(research_crypto_sentiment),
+    _tool(research_social_x_search),
+    _tool(research_defillama_free),
+    _tool(research_goldsky_graphql),
+    _tool(research_goldsky_search),
+    _tool(research_goldsky_schema),
+    _tool(research_get_alpha_types),
+    _tool(research_search_alpha),
+    _tool(research_get_basis_symbols),
+    _tool(research_get_basis_apy_sources),
+    _tool(research_get_top_apy),
+    _tool(research_get_asset_basis_info),
+    _tool(research_search_delta_lab_assets),
+    _tool(research_search_delta_lab_markets),
+    _tool(research_search_delta_lab_instruments),
+    _tool(research_get_delta_lab_pendle_market),
+    _tool(research_search_price),
+    _tool(research_search_lending),
+    _tool(research_search_perp),
+    _tool(research_search_borrow_routes),
     # Visual / chart workspace.
-    _entry("visual", shells_get_frontend_context, opencode_only=True),
-    _entry("visual", shells_search_chart_series, opencode_only=True),
-    _entry("visual", shells_set_active_market, opencode_only=True),
-    _entry("visual", shells_create_chart, opencode_only=True),
-    _entry("visual", shells_set_active_chart, opencode_only=True),
-    _entry("visual", shells_add_workspace_chart_series, opencode_only=True),
-    _entry("visual", shells_add_workspace_chart_annotation, opencode_only=True),
-    _entry("visual", shells_add_workspace_chart_overlay, opencode_only=True),
-    _entry("visual", shells_clear_chart_workspace, opencode_only=True),
-    _entry("visual", shells_notify, opencode_only=True),
+    _tool(shells_get_frontend_context, opencode_only),
+    _tool(shells_search_chart_series, opencode_only),
+    _tool(shells_set_active_market, opencode_only),
+    _tool(shells_create_chart, opencode_only),
+    _tool(shells_set_active_chart, opencode_only),
+    _tool(shells_add_workspace_chart_series, opencode_only),
+    _tool(shells_add_workspace_chart_annotation, opencode_only),
+    _tool(shells_add_workspace_chart_overlay, opencode_only),
+    _tool(shells_clear_chart_workspace, opencode_only),
+    _tool(shells_notify, opencode_only),
 )
 
 
-def tools_for_profile(
-    profile: str,
+def tools_for_mcp(
     *,
     include_opencode_only: bool | None = None,
-) -> tuple[ToolEntry, ...]:
-    if profile not in VALID_PROFILES:
-        raise ValueError(f"Unknown MCP profile: {profile}")
-
+) -> tuple[Callable[..., Any], ...]:
     include_shells = (
         is_opencode_instance()
         if include_opencode_only is None
         else include_opencode_only
     )
-    tools: list[ToolEntry] = []
+    tools: list[Callable[..., Any]] = []
     seen: set[str] = set()
 
-    for entry in TOOL_REGISTRY:
-        if entry.opencode_only and not include_shells:
+    for fn in TOOL_REGISTRY:
+        if is_opencode_only_tool(fn) and not include_shells:
             continue
-        if profile == "all" or profile in entry.profiles:
-            if entry.name in seen:
-                continue
-            seen.add(entry.name)
-            tools.append(entry)
+        name = tool_name(fn)
+        if name in seen:
+            continue
+        seen.add(name)
+        tools.append(fn)
 
     return tuple(tools)

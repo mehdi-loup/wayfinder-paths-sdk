@@ -29,92 +29,47 @@ def _claude_settings() -> dict:
     return json.loads((SDK_ROOT / ".claude" / "settings.json").read_text())
 
 
-def test_main_profile_exposes_execution_surface_only() -> None:
-    names = _tool_names(mcp_server.build_mcp("main"))
+def _opencode_settings() -> dict:
+    return json.loads((SDK_ROOT / ".opencode" / "opencode.json").read_text())
+
+
+def _claude_permission_names(section: str) -> set[str]:
+    settings = _claude_settings()
+    permission_names = set()
+    for full_name in settings["permissions"][section]:
+        assert full_name.startswith("mcp__wayfinder__")
+        permission_names.add(full_name.removeprefix("mcp__wayfinder__"))
+    return permission_names
+
+
+def test_mcp_catalog_exposes_expected_non_shell_tools() -> None:
+    names = _tool_names(mcp_server.build_mcp())
 
     assert "core_execute" in names
+    assert "core_run_script" in names
+    assert "core_runner" in names
+    assert "research_web_search" in names
+    assert "research_get_top_apy" in names
+    assert "research_search_delta_lab_markets" in names
+    assert "research_search_delta_lab_instruments" in names
+    assert "research_get_delta_lab_pendle_market" in names
     assert "hyperliquid_place_market_order" in names
     assert "hyperliquid_deposit" in names
     assert "polymarket_place_market_order" in names
     assert "polymarket_deposit" in names
     assert "contracts_deploy" in names
-    assert "core_run_strategy" in names
-    assert "core_runner" in names
-    assert "core_run_script" in names
-
-    assert "research_web_search" not in names
-    assert "research_get_top_apy" not in names
     assert "shells_create_chart" not in names
 
 
-def test_research_profile_exposes_research_and_scripts_without_live_execution() -> None:
-    names = _tool_names(mcp_server.build_mcp("research"))
-
-    assert "research_web_search" in names
-    assert "research_goldsky_graphql" in names
-    assert "research_get_top_apy" in names
-    assert "research_search_delta_lab_markets" in names
-    assert "research_search_delta_lab_instruments" in names
-    assert "research_get_delta_lab_pendle_market" in names
-    assert "core_get_adapters_and_strategies" in names
-    assert "core_run_script" in names
-
-    assert "core_execute" not in names
-    assert "hyperliquid_place_market_order" not in names
-    assert "hyperliquid_deposit" not in names
-    assert "polymarket_place_market_order" not in names
-    assert "polymarket_deposit" not in names
-    assert "contracts_deploy" not in names
-    assert "core_run_strategy" not in names
-    assert "core_runner" not in names
-    assert "shells_create_chart" not in names
-
-
-def test_visual_profile_exposes_shells_tools_and_scripts_in_opencode(
-    monkeypatch,
-) -> None:
+def test_mcp_catalog_exposes_shells_tools_in_opencode(monkeypatch) -> None:
     monkeypatch.setattr(tool_registry, "is_opencode_instance", lambda: True)
 
-    names = _tool_names(mcp_server.build_mcp("visual"))
+    names = _tool_names(mcp_server.build_mcp())
 
     assert "shells_get_frontend_context" in names
     assert "shells_set_active_market" in names
     assert "shells_create_chart" in names
-    assert "core_run_script" in names
-
-    assert "research_web_search" not in names
-    assert "core_execute" not in names
-    assert "hyperliquid_place_market_order" not in names
-    assert "hyperliquid_deposit" not in names
-    assert "polymarket_place_market_order" not in names
-    assert "polymarket_deposit" not in names
-    assert "core_runner" not in names
-
-
-def test_visual_profile_hides_shells_tools_outside_opencode() -> None:
-    names = _tool_names(mcp_server.build_mcp("visual"))
-
-    assert names == {"core_run_script"}
-
-
-def test_default_mcp_keeps_legacy_all_profile() -> None:
-    names = _tool_names(mcp_server.mcp)
-
-    assert "core_execute" in names
-    assert "research_web_search" in names
-    assert "core_run_script" in names
-    assert "shells_create_chart" not in names
-
-
-def test_all_profile_exposes_shells_tools_in_opencode(monkeypatch) -> None:
-    monkeypatch.setattr(tool_registry, "is_opencode_instance", lambda: True)
-
-    names = _tool_names(mcp_server.build_mcp("all"))
-
-    assert "core_execute" in names
-    assert "research_web_search" in names
-    assert "shells_create_chart" in names
-    assert "shells_set_active_market" in names
+    assert "shells_notify" in names
 
 
 def test_opencode_agents_scope_single_mcp_tool_names() -> None:
@@ -137,23 +92,55 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert visual["wayfinder_core_run_script"] == "allow"
 
 
+def test_opencode_config_scopes_visible_wayfinder_tools_by_agent() -> None:
+    settings = _opencode_settings()
+
+    assert settings["tools"]["wayfinder_*"] is False
+    assert settings["agent"]["wayfinder"]["tools"] == {
+        "wayfinder_core_*": True,
+        "wayfinder_onchain_*": True,
+        "wayfinder_hyperliquid_*": True,
+        "wayfinder_polymarket_*": True,
+        "wayfinder_contracts_*": True,
+    }
+
+    for agent in ("wayfinder-research", "wayfinder-quant"):
+        assert settings["agent"][agent]["tools"] == {
+            "wayfinder_research_*": True,
+            "wayfinder_core_run_script": True,
+            "wayfinder_core_get_adapters_and_strategies": True,
+        }
+
+    assert settings["agent"]["wayfinder-visual"]["tools"] == {
+        "wayfinder_shells_*": True,
+        "wayfinder_core_run_script": True,
+    }
+
+
 def test_claude_settings_reference_registered_tool_names() -> None:
     registry_names = {
-        entry.name
-        for entry in tool_registry.tools_for_profile("all", include_opencode_only=True)
+        tool_registry.tool_name(fn)
+        for fn in tool_registry.tools_for_mcp(include_opencode_only=True)
     }
-    settings = _claude_settings()
-
-    permission_names = set()
-    for section in ("allow", "ask"):
-        for full_name in settings["permissions"][section]:
-            assert full_name.startswith("mcp__wayfinder__")
-            permission_names.add(full_name.removeprefix("mcp__wayfinder__"))
+    permission_names = _claude_permission_names("allow") | _claude_permission_names(
+        "ask"
+    )
 
     assert permission_names <= registry_names
 
-    pre_tool_hooks = settings["hooks"]["PreToolUse"]
+    pre_tool_hooks = _claude_settings()["hooks"]["PreToolUse"]
     for hook in pre_tool_hooks:
         matcher = hook["matcher"]
         if matcher.startswith("mcp__wayfinder__") and "(" not in matcher:
             assert matcher.removeprefix("mcp__wayfinder__") in registry_names
+
+
+def test_claude_asks_for_registered_execution_and_schedule_tools() -> None:
+    ask_names = _claude_permission_names("ask")
+    sensitive_names = {
+        tool_registry.tool_name(fn)
+        for fn in tool_registry.tools_for_mcp(include_opencode_only=True)
+        if tool_registry.tool_access(fn) in {"execute", "schedule"}
+    }
+
+    assert sensitive_names <= ask_names

@@ -360,7 +360,7 @@ poetry run python -m wayfinder_paths.mcp.server
 | `research_*` | Web, X, DeFiLlama, Goldsky, Alpha Lab, and Delta Lab research tools |
 | `core_run_script` / `core_run_strategy` / `core_runner` | Execute bounded scripts, strategy actions, and runner jobs |
 
-The server defaults to the `all` profile for compatibility. OpenCode scopes tool access per agent through `.opencode/agents/*.md`; local debugging can use `WAYFINDER_MCP_PROFILE=main|research|visual|all`.
+The SDK exposes one MCP catalog. OpenCode scopes per-agent visibility with `tools` glob rules, while Claude and OpenCode permissions still gate sensitive calls.
 
 ## Scripts and Helpers
 
