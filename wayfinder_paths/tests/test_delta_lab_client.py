@@ -47,7 +47,7 @@ async def test_get_asset_timeseries_serializes_series_list(
     args, kwargs = client._authed_request.await_args
     assert args == (
         "GET",
-        "https://example.com/api/v1/delta-lab/assets/VIRTUAL/timeseries",
+        "https://example.com/api/v1/delta-lab/assets/VIRTUAL/timeseries/",
     )
     assert kwargs["params"] == {
         "lookback_days": 30,
