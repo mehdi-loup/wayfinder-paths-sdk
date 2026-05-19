@@ -45,11 +45,11 @@ DEFAULT_HYPERLIQUID_BUILDER_FEE: dict[str, Any] = {
 MIN_DEPOSIT_USD: float = 5.0
 MIN_ORDER_USD_NOTIONAL: float = 10.0
 
-# Bridge2 deducts a flat fee from the HL-side `amount` when withdrawing to
-# Arbitrum. To make `amount_usdc` the net delivered amount, the tool internally
-# requests `amount_usdc + WITHDRAW_FEE_USD` from HL.
+# Bridge2 takes a flat fee out of the HL-side withdraw `amount`. The
+# `hyperliquid_withdraw` tool treats `amount_usdc` as the gross debit; net
+# delivered to Arbitrum = `amount_usdc - WITHDRAW_FEE_USD`.
 WITHDRAW_FEE_USD: float = 1.0
-# Anything under $2 net would be eaten by the fee before it lands.
+# At least $2 gross so something lands on Arbitrum after the $1 fee.
 MIN_WITHDRAW_USD: float = 2.0
 
 MARKET_TYPE_PERP: str = "perp"

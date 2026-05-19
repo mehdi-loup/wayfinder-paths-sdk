@@ -23,7 +23,7 @@ From Hyperliquid's Bridge2 docs:
 - **Minimum deposit is 5 USDC**; deposits below that are **lost**.
 - Deposits are typically credited **in < 1 minute**.
 - Withdrawals typically arrive **in several minutes** (often longer than deposits).
-- **Withdrawal fee is $1 USDC** — Minimum `amount_usdc` is `$2`.
+- **Withdrawal fee is $1 USDC** — `mcp__wayfinder__hyperliquid_withdraw(amount_usdc=N)` debits `$N` from unified; Bridge2 takes $1 out of that, so Arbitrum receives `$N − 1`. Minimum `amount_usdc` is `$2`.
 
 Treat these as _best-effort expectations_, not guarantees. In orchestration code, always:
 

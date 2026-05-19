@@ -450,27 +450,28 @@ async def hyperliquid_withdraw(
 ) -> dict[str, Any]:
     """Withdraw USDC from Hyperliquid back to Arbitrum.
 
-    `amount_usdc` is the **net amount delivered to Arbitrum**. The Bridge2 $1
-    fee is added on top automatically, so the unified balance is debited
-    `amount_usdc + 1` USDC.
+    `amount_usdc` is the **gross amount debited from the unified balance**.
+    Bridge2 takes a $1 USDC fee out of it, so the wallet receives
+    `amount_usdc - 1` USDC on Arbitrum. Minimum `amount_usdc` is `$2`
+    (anything smaller leaves nothing after the fee).
 
     Args:
         wallet_label: Wallet receiving the withdrawal on Arbitrum.
-        amount_usdc: Net USDC to receive on Arbitrum (must be >= 2, otherwise
-            the $1 bridge fee would eat too much of the withdrawal).
+        amount_usdc: USDC debited from the unified balance (must be >= 2).
+            Net delivered to Arbitrum = `amount_usdc - 1`.
     """
     wallet_label = throw_if_empty_str("wallet_label is required", wallet_label)
     amt = throw_if_not_number("amount_usdc must be a number", amount_usdc)
     if amt < MIN_WITHDRAW_USD:
         raise ValueError(
             f"amount_usdc must be >= {MIN_WITHDRAW_USD:g} USDC "
-            f"(Bridge2 charges a ${WITHDRAW_FEE_USD:g} fee)"
+            f"(Bridge2 takes a ${WITHDRAW_FEE_USD:g} fee out of this amount)"
         )
 
     adapter, sender = await _make_hl_adapter(wallet_label)
 
     effects: list[dict[str, Any]] = []
-    ok_wd, res = await adapter.withdraw(amount=amt + WITHDRAW_FEE_USD, address=sender)
+    ok_wd, res = await adapter.withdraw(amount=amt, address=sender)
     effects.append({"type": "hl", "label": "withdraw", "ok": ok_wd, "result": res})
 
     if ok_wd:
