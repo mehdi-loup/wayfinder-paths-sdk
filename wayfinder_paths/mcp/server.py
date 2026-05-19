@@ -46,7 +46,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("WAYFINDER_MCP_PROFILE", "all"),
         choices=sorted(VALID_PROFILES),
     )
-    parser.add_argument("--host", default=os.environ.get("WAYFINDER_MCP_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--host", default=os.environ.get("WAYFINDER_MCP_HOST", "127.0.0.1")
+    )
     parser.add_argument(
         "--port",
         default=int(os.environ.get("WAYFINDER_MCP_PORT", "8000")),

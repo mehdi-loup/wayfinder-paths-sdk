@@ -196,7 +196,11 @@ def tools_for_profile(
     if profile not in VALID_PROFILES:
         raise ValueError(f"Unknown MCP profile: {profile}")
 
-    include_shells = is_opencode_instance() if include_opencode_only is None else include_opencode_only
+    include_shells = (
+        is_opencode_instance()
+        if include_opencode_only is None
+        else include_opencode_only
+    )
     tools: list[ToolEntry] = []
     seen: set[str] = set()
 

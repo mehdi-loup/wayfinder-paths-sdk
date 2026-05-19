@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
 from wayfinder_paths.adapters.polymarket_adapter.adapter import PolymarketAdapter
-from wayfinder_paths.core.config import CONFIG
-from wayfinder_paths.core.constants.polymarket import (
-    POLYGON_CHAIN_ID,
-    POLYGON_USDC_ADDRESS,
+from wayfinder_paths.core.clients.PolymarketClient import (
+    PolymarketSort,
+    PolymarketStatus,
 )
+from wayfinder_paths.core.config import CONFIG
+from wayfinder_paths.core.constants.polymarket import POLYGON_CHAIN_ID
 from wayfinder_paths.core.utils.wallets import (
     get_wallet_sign_hash_callback,
     get_wallet_sign_typed_data_callback,
@@ -229,12 +229,9 @@ async def polymarket_read(
     # search/trending
     query: str | None = None,
     limit: int = 10,
-    page: int = 1,
-    keep_closed_markets: bool = False,
-    rerank: bool = True,
+    sort: PolymarketSort = "trending",
+    status: PolymarketStatus = "active",
     offset: int = 0,
-    events_status: str | None = "active",
-    end_date_min: str | None = datetime.now(UTC).strftime("%Y-%m-%d"),
     # market/event
     market_slug: str | None = None,
     event_slug: str | None = None,
@@ -254,8 +251,10 @@ async def polymarket_read(
     For account state (positions / orders / activity / trades) call `polymarket_get_state`.
 
     Actions:
-      - `search`: fuzzy market search by `query`. `events_status` filters active/closed/archived;
-        `end_date_min` (YYYY-MM-DD) filters out resolved markets; `rerank` re-scores results.
+      - `search`: market search via vault-backend. Backend handles tag resolution, ticker
+        synonyms (BTC↔Bitcoin), duration intent ("5 min" → 5-minute markets), ranking by
+        relevance + activity + freshness. `sort`: trending|volume24h|liquidity|fresh.
+        `status`: active|closed|all.
       - `trending`: list markets sorted by 24h volume (`limit`, `offset`).
       - `get_market` / `get_event`: fetch by `market_slug` / `event_slug`.
       - `quote`: market-order quote. BUY needs `amount_collateral` (USDC), SELL needs `shares`.
@@ -317,33 +316,15 @@ async def polymarket_read(
         match action:
             case "search":
                 q = throw_if_empty_str("query is required for search", query)
-                if events_status and events_status not in {
-                    "active",
-                    "closed",
-                    "archived",
-                }:
-                    raise ValueError(
-                        f"events_status must be one of: active, closed, archived (got {events_status!r})"
-                    )
-
-                ok_rows, rows = await adapter.search_markets_fuzzy(
+                ok_rows, rows = await adapter.search_markets(
                     query=q,
                     limit=int(limit),
-                    page=int(page),
-                    keep_closed_markets=bool(keep_closed_markets),
-                    events_status=events_status,
-                    end_date_min=end_date_min,
-                    rerank=bool(rerank),
+                    sort=sort,
+                    status=status,
                 )
                 if not ok_rows:
                     return err("error", str(rows))
-                return ok(
-                    {
-                        "action": action,
-                        "query": q,
-                        "markets": [_trim_market(m) for m in rows],
-                    }
-                )
+                return ok({"action": action, "query": q, "markets": rows})
 
             case "trending":
                 ok_rows, rows = await adapter.list_markets(
@@ -483,8 +464,6 @@ async def polymarket_read(
 @catch_errors
 async def polymarket_execute(
     action: Literal[
-        "bridge_deposit",
-        "bridge_withdraw",
         "fund_deposit_wallet",
         "withdraw_deposit_wallet",
         "place_market_order",
@@ -494,16 +473,8 @@ async def polymarket_execute(
     ],
     *,
     wallet_label: str,
-    # bridge
-    from_chain_id: int = POLYGON_CHAIN_ID,
-    from_token_address: str = POLYGON_USDC_ADDRESS,
+    # deposit-wallet move
     amount: float | None = None,
-    recipient_address: str | None = None,
-    amount_pusd: float | None = None,
-    to_chain_id: int = POLYGON_CHAIN_ID,
-    to_token_address: str = POLYGON_USDC_ADDRESS,
-    recipient_addr: str | None = None,
-    token_decimals: int = 6,
     # trade
     market_slug: str | None = None,
     outcome: str | int = "YES",
@@ -521,15 +492,13 @@ async def polymarket_execute(
     # redeem
     condition_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute Polymarket trades, bridge collateral, cancel/redeem.
+    """Execute Polymarket trades on the owner EOA / deposit wallet.
 
-    Polymarket settles on Polygon in pUSD (post-V2 rollover). Bridging in/out goes through
-    the official bridge; trading uses the CLOB.
+    Polymarket V2 settles on Polygon in pUSD (`0xC011a7...`). This tool handles the
+    deposit-wallet + CLOB surface. For collateral routing in/out of pUSD, use the BRAP
+    swap MCP tools (see "Routing collateral" below).
 
     Actions:
-      - `bridge_deposit`: bridge `amount` of `from_token_address` from `from_chain_id` into
-        Polymarket pUSD. `recipient_address` defaults to sender. `token_decimals` defaults to 6.
-      - `bridge_withdraw`: bridge `amount_pusd` out to `to_chain_id` / `to_token_address`.
       - `fund_deposit_wallet`: move `amount` pUSD from the owner EOA into the derived deposit
         wallet (Polygon transfer). Required before trading.
       - `withdraw_deposit_wallet`: pull pUSD from the deposit wallet back to the owner EOA
@@ -543,6 +512,12 @@ async def polymarket_execute(
       - `redeem_positions`: claim winnings on a resolved market by `condition_id`. USDC.e
         proceeds are auto-wrapped 1:1 to pUSD via BRAP's polymarket_bridge solver through
         the deposit wallet.
+
+    Routing collateral (in/out of pUSD): use `onchain_quote_swap` then
+    `core_execute(kind="swap", ...)` with `to_token` or `from_token` set to pUSD
+    (`polygon_0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`). BRAP picks the right solver
+    (`polymarket_bridge` for USDC.e ↔ pUSD 1:1 wraps; standard DEX routes for everything else)
+    and handles cross-chain. Works for any source token/chain; no Polymarket-specific call needed.
 
     Args:
         wallet_label: Required.
@@ -560,15 +535,7 @@ async def polymarket_execute(
     tool_input = {
         "action": action,
         "wallet_label": want,
-        "from_chain_id": from_chain_id,
-        "from_token_address": from_token_address,
         "amount": amount,
-        "recipient_address": recipient_address,
-        "amount_pusd": amount_pusd,
-        "to_chain_id": to_chain_id,
-        "to_token_address": to_token_address,
-        "recipient_addr": recipient_addr,
-        "token_decimals": token_decimals,
         "market_slug": market_slug,
         "outcome": outcome,
         "token_id": token_id,
@@ -614,75 +581,6 @@ async def polymarket_execute(
             )
 
         match action:
-            case "bridge_deposit":
-                throw_if_none("amount is required for bridge_deposit", amount)
-                rcpt = normalize_address(recipient_address) or sender
-                ok_dep, res = await adapter.bridge_deposit(
-                    from_chain_id=int(from_chain_id),
-                    from_token_address=str(from_token_address),
-                    amount=float(amount),
-                    recipient_address=str(rcpt),
-                    token_decimals=int(token_decimals),
-                )
-                effects.append(
-                    {
-                        "type": "polymarket",
-                        "label": "bridge_deposit",
-                        "ok": ok_dep,
-                        "result": res,
-                    }
-                )
-                status = "confirmed" if ok_dep else "failed"
-                _annotate(
-                    address=sender,
-                    label=want,
-                    action="bridge_deposit",
-                    status=status,
-                    chain_id=int(from_chain_id),
-                    details={
-                        "amount": float(amount),
-                        "from_token_address": str(from_token_address),
-                        "recipient_address": str(rcpt),
-                    },
-                )
-                return _done(status)
-
-            case "bridge_withdraw":
-                throw_if_none(
-                    "amount_pusd is required for bridge_withdraw", amount_pusd
-                )
-                rcpt = normalize_address(recipient_addr) or sender
-                ok_wd, res = await adapter.bridge_withdraw(
-                    amount_pusd=float(amount_pusd),
-                    to_chain_id=int(to_chain_id),
-                    to_token_address=str(to_token_address),
-                    recipient_addr=str(rcpt),
-                    token_decimals=int(token_decimals),
-                )
-                effects.append(
-                    {
-                        "type": "polymarket",
-                        "label": "bridge_withdraw",
-                        "ok": ok_wd,
-                        "result": res,
-                    }
-                )
-                status = "confirmed" if ok_wd else "failed"
-                _annotate(
-                    address=sender,
-                    label=want,
-                    action="bridge_withdraw",
-                    status=status,
-                    chain_id=int(POLYGON_CHAIN_ID),
-                    details={
-                        "amount_pusd": float(amount_pusd),
-                        "to_chain_id": int(to_chain_id),
-                        "to_token_address": str(to_token_address),
-                        "recipient_addr": str(rcpt),
-                    },
-                )
-                return _done(status)
-
             case "fund_deposit_wallet":
                 throw_if_none("amount is required for fund_deposit_wallet", amount)
                 ok_fund, res = await adapter.fund_deposit_wallet(
