@@ -18,6 +18,7 @@ from wayfinder_paths.core.constants.hyperliquid import (
     HYPERLIQUID_BRIDGE_ADDRESS,
     MARKET_SEARCH_ALIASES,
     MARKET_SEARCH_MIN_MATCH_SCORE,
+    MARKET_TYPE_HIP3,
     MARKET_TYPE_HIP4,
     MARKET_TYPE_SPOT,
     MIN_ORDER_USD_NOTIONAL,
@@ -500,11 +501,15 @@ async def hyperliquid_update_leverage(
 
     Leverage applies per-asset on Hyperliquid — setting it on BTC doesn't touch ETH.
 
+    HIP-3 perps (`xyz:`, `flx:`, `vntl:`, `hyna:`, `km:`, ...) only support
+    isolated margin; `is_cross=True` is silently overridden to `False` for them.
+
     Args:
         wallet_label: Wallet to update.
         asset_name: Canonical perp identifier (`BTC-USDC`, `xyz:SP500`). Not for spot.
         leverage: Positive integer; HL enforces a per-asset maximum.
-        is_cross: True for cross margin (default), False for isolated.
+        is_cross: True for cross margin (default), False for isolated. Forced
+            to False on HIP-3 perps.
     """
     wallet_label = throw_if_empty_str("wallet_label is required", wallet_label)
     asset_name = throw_if_empty_str("asset_name is required", asset_name)
@@ -514,13 +519,17 @@ async def hyperliquid_update_leverage(
 
     try:
         adapter, sender = await _make_hl_adapter(wallet_label)
-        resolved_asset_id, _ = await _resolve_asset(adapter, asset_name)
+        resolved_asset_id, market_type = await _resolve_asset(adapter, asset_name)
     except ValueError as exc:
         return err("invalid_coin", str(exc))
 
+    effective_is_cross = bool(is_cross)
+    if market_type == MARKET_TYPE_HIP3 and effective_is_cross:
+        effective_is_cross = False
+
     effects: list[dict[str, Any]] = []
     ok_lev, res = await adapter.update_leverage(
-        resolved_asset_id, lev, bool(is_cross), sender
+        resolved_asset_id, lev, effective_is_cross, sender
     )
     effects.append(
         {"type": "hl", "label": "update_leverage", "ok": ok_lev, "result": res}
@@ -535,6 +544,7 @@ async def hyperliquid_update_leverage(
             "asset_id": resolved_asset_id,
             "asset_name": asset_name,
             "leverage": lev,
+            "is_cross": effective_is_cross,
         },
     )
     return ok(
@@ -544,6 +554,8 @@ async def hyperliquid_update_leverage(
             "address": sender,
             "asset_id": resolved_asset_id,
             "asset_name": asset_name,
+            "leverage": lev,
+            "is_cross": effective_is_cross,
             "effects": effects,
         }
     )
@@ -786,6 +798,10 @@ async def hyperliquid_place_market_order(
     HIP-4 outcome markets (`#N` asset names) trade as integer contracts with
     no builder fee and no $10 notional floor — `usd_amount` is converted to
     contracts at mid.
+
+    `usd_amount` is converted to asset units at the mid price, then **rounded
+    down to the asset's lot size** — actual notional can be a few % below the
+    requested USD.
 
     For leverage / margin mode, call `hyperliquid_update_leverage` first.
 
