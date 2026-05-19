@@ -260,7 +260,9 @@ async def backtest_delta_neutral(
         >>> print(f"Funding income: {result.stats['total_funding']:.4f}")
         >>> print(f"Sharpe: {result.stats['sharpe']:.2f}")
     """
-    perp_prices = await fetch_prices(symbols, start_date, end_date, interval, source=source)
+    perp_prices = await fetch_prices(
+        symbols, start_date, end_date, interval, source=source
+    )
 
     perp_funding: pd.DataFrame | None = None
     try:

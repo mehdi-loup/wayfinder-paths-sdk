@@ -52,7 +52,9 @@ def _resolve_cache_root(cache_dir: str | Path | None) -> Path:
 def _normalize(value: Any) -> Any:
     """Make `value` hash-stable: sort lists/sets, ISO-format datetimes."""
     if isinstance(value, (list, tuple, set, frozenset)):
-        return sorted([_normalize(v) for v in value], key=lambda x: json.dumps(x, default=str))
+        return sorted(
+            [_normalize(v) for v in value], key=lambda x: json.dumps(x, default=str)
+        )
     if isinstance(value, dict):
         return {k: _normalize(v) for k, v in sorted(value.items())}
     if isinstance(value, (datetime, pd.Timestamp)):
