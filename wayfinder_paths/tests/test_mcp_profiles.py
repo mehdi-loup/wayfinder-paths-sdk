@@ -28,8 +28,10 @@ def test_main_profile_exposes_execution_surface_only() -> None:
     names = _tool_names(mcp_server.build_mcp("main"))
 
     assert "core_execute" in names
-    assert "hyperliquid_execute" in names
-    assert "polymarket_execute" in names
+    assert "hyperliquid_place_market_order" in names
+    assert "hyperliquid_deposit" in names
+    assert "polymarket_place_market_order" in names
+    assert "polymarket_deposit" in names
     assert "contracts_deploy" in names
     assert "core_run_strategy" in names
     assert "core_runner" in names
@@ -53,8 +55,10 @@ def test_research_profile_exposes_research_and_scripts_without_live_execution() 
     assert "core_run_script" in names
 
     assert "core_execute" not in names
-    assert "hyperliquid_execute" not in names
-    assert "polymarket_execute" not in names
+    assert "hyperliquid_place_market_order" not in names
+    assert "hyperliquid_deposit" not in names
+    assert "polymarket_place_market_order" not in names
+    assert "polymarket_deposit" not in names
     assert "contracts_deploy" not in names
     assert "core_run_strategy" not in names
     assert "core_runner" not in names
@@ -75,8 +79,10 @@ def test_visual_profile_exposes_shells_tools_and_scripts_in_opencode(
 
     assert "research_web_search" not in names
     assert "core_execute" not in names
-    assert "hyperliquid_execute" not in names
-    assert "polymarket_execute" not in names
+    assert "hyperliquid_place_market_order" not in names
+    assert "hyperliquid_deposit" not in names
+    assert "polymarket_place_market_order" not in names
+    assert "polymarket_deposit" not in names
     assert "core_runner" not in names
 
 

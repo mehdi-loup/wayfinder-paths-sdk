@@ -44,10 +44,16 @@ from wayfinder_paths.mcp.tools.goldsky_direct import (
     research_goldsky_search,
 )
 from wayfinder_paths.mcp.tools.hyperliquid import (
-    hyperliquid_execute,
+    hyperliquid_cancel_order,
+    hyperliquid_deposit,
     hyperliquid_get_state,
+    hyperliquid_place_limit_order,
+    hyperliquid_place_market_order,
+    hyperliquid_place_trigger_order,
     hyperliquid_search_market,
     hyperliquid_search_mid_prices,
+    hyperliquid_update_leverage,
+    hyperliquid_withdraw,
 )
 from wayfinder_paths.mcp.tools.instance_state import (
     shells_add_workspace_chart_annotation,
@@ -62,9 +68,14 @@ from wayfinder_paths.mcp.tools.instance_state import (
 )
 from wayfinder_paths.mcp.tools.notify import shells_notify
 from wayfinder_paths.mcp.tools.polymarket import (
-    polymarket_execute,
+    polymarket_cancel_order,
+    polymarket_deposit,
     polymarket_get_state,
+    polymarket_place_limit_order,
+    polymarket_place_market_order,
     polymarket_read,
+    polymarket_redeem_positions,
+    polymarket_withdraw,
 )
 from wayfinder_paths.mcp.tools.quotes import onchain_quote_swap
 from wayfinder_paths.mcp.tools.research_gateway import (
@@ -144,8 +155,19 @@ TOOL_REGISTRY: tuple[ToolEntry, ...] = (
     _entry("main", contracts_call),
     _entry(("main", "research", "visual"), core_run_script, "execute"),
     _entry("main", core_execute, "execute"),
-    _entry("main", hyperliquid_execute, "execute"),
-    _entry("main", polymarket_execute, "execute"),
+    _entry("main", hyperliquid_place_market_order, "execute"),
+    _entry("main", hyperliquid_place_limit_order, "execute"),
+    _entry("main", hyperliquid_place_trigger_order, "execute"),
+    _entry("main", hyperliquid_cancel_order, "execute"),
+    _entry("main", hyperliquid_update_leverage, "execute"),
+    _entry("main", hyperliquid_deposit, "execute"),
+    _entry("main", hyperliquid_withdraw, "execute"),
+    _entry("main", polymarket_deposit, "execute"),
+    _entry("main", polymarket_withdraw, "execute"),
+    _entry("main", polymarket_place_market_order, "execute"),
+    _entry("main", polymarket_place_limit_order, "execute"),
+    _entry("main", polymarket_cancel_order, "execute"),
+    _entry("main", polymarket_redeem_positions, "execute"),
     _entry("main", contracts_deploy, "execute"),
     _entry("main", contracts_execute, "execute"),
     _entry("main", core_run_strategy, "execute"),

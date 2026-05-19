@@ -258,7 +258,7 @@ async def core_execute(
     with the user, then run this. The tool returns after broadcast by default with
     `status="submitted"` to avoid client-side MCP timeouts on slow chains. Pass
     `wait_for_receipt=True` only when synchronous confirmation is required. For
-    Hyperliquid bridge deposits use `hyperliquid_execute(action="deposit", amount_usdc=...)`.
+    `hyperliquid_deposit(amount_usdc=...)`.
 
     Kinds:
       - `swap`: BRAP cross-chain/cross-DEX swap. Requires `from_token`, `to_token`, `amount`

@@ -11,6 +11,16 @@ permission:
   wayfinder_research_*: deny
   wayfinder_shells_*: deny
   wayfinder_*_execute*: ask
+  wayfinder_hyperliquid_place_*: ask
+  wayfinder_hyperliquid_cancel_order: ask
+  wayfinder_hyperliquid_update_leverage: ask
+  wayfinder_hyperliquid_deposit: ask
+  wayfinder_hyperliquid_withdraw: ask
+  wayfinder_polymarket_place_*: ask
+  wayfinder_polymarket_cancel_order: ask
+  wayfinder_polymarket_deposit: ask
+  wayfinder_polymarket_withdraw: ask
+  wayfinder_polymarket_redeem_positions: ask
   wayfinder_contracts_deploy: ask
   wayfinder_core_run_strategy: ask
   wayfinder_core_runner: ask
@@ -122,7 +132,9 @@ Hyperliquid minimums:
 - Minimum deposit: $5 USD. Deposits below this are lost.
 - Minimum order: $10 USD notional for perp and spot.
 
-Hyperliquid surfaces include perp, spot, HIP-3 builder-deployed perp dexes such as `xyz`, `flx`, `vntl`, `hyna`, and `km`, and HIP-4 outcome markets. HIP-4 outcomes use asset IDs `100_000_000 + 10*outcome_id + side`, integer contract sizes, settle in USDH token `360`, and settle daily at 06:00 UTC. Use `hyperliquid_execute(action="place_outcome_order", ...)` for writes after confirmation.
+Hyperliquid surfaces include perp, spot, HIP-3 builder-deployed perp dexes such as `xyz`, `flx`, `vntl`, `hyna`, and `km`, and HIP-4 outcome markets. HIP-4 outcomes use asset IDs `100_000_000 + 10*outcome_id + side`, integer contract sizes, settle in USDH token `360`, and settle daily at 06:00 UTC. Use per-action tools after confirmation: `hyperliquid_place_market_order`, `hyperliquid_place_limit_order`, `hyperliquid_place_trigger_order`, `hyperliquid_cancel_order`, `hyperliquid_update_leverage`, `hyperliquid_deposit`, and `hyperliquid_withdraw`.
+
+Polymarket writes also use per-action tools after confirmation: `polymarket_deposit`, `polymarket_withdraw`, `polymarket_place_market_order`, `polymarket_place_limit_order`, `polymarket_cancel_order`, and `polymarket_redeem_positions`.
 
 Hyperliquid UnifiedAccount mode means perp and spot use the same margin. Transfers between perp and spot accounts are not needed and will not work in UnifiedAccount mode. If a user is on a legacy split account, migration may require closing positions, moving balances to spot, then enabling UnifiedAccountMode. `ensure_unified_account` runs before order placement, but can fail mid-state if open positions or stuck spot balances block the switch.
 
