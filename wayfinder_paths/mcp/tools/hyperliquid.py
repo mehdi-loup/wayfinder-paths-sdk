@@ -252,9 +252,11 @@ async def _place_outcome_order(
 ) -> dict[str, Any]:
     """HIP-4 outcome leg of hyperliquid_place_{market,limit}_order.
 
-    Outcomes settle in USDH (token 360), trade as integer contracts, and are
-    zero-fee (no builder fee). `usd_amount` sizing is market-only — limit
-    outcome orders require explicit integer `size`.
+    Outcomes settle in USDH (token 360), trade as integer contracts, and have
+    a $10 USDH minimum order value. The standard Wayfinder builder code is
+    attached on every outcome order (HL accrues the fee on the sell side per
+    the HIP-4 spec). `usd_amount` sizing is market-only — limit outcome
+    orders require explicit integer `size`.
     """
     if order_type == "limit":
         throw_if_none("price is required for limit orders", price)
@@ -310,6 +312,18 @@ async def _place_outcome_order(
         cloid=cloid,
         address=sender,
     )
+    # Outcome orders settle in USDH. When the wallet lacks USDH, HL just says
+    # "Insufficient spot balance asset=N" — append a funding hint so agents
+    # know how to recover. Only the inner-status-error shape carries this
+    # message; outer-status errors (res["status"]=="err") use a different
+    # response schema and are skipped here.
+    if not ok_order and res["status"] == "ok":
+        for s in res["response"]["data"]["statuses"]:
+            if "error" in s and "Insufficient spot balance" in s["error"]:
+                s["error"] += (
+                    " — Outcome markets are purchased using USDH, please "
+                    "swap into sufficient USDH using the USDH/USDC spot pair."
+                )
     effects.append(
         {"type": "hl", "label": "place_outcome_order", "ok": ok_order, "result": res}
     )
@@ -795,8 +809,8 @@ async def hyperliquid_place_market_order(
 ) -> dict[str, Any]:
     """Place an IOC market order on a Hyperliquid perp / spot / HIP-4 market.
 
-    HIP-4 outcome markets (`#N` asset names) trade as integer contracts with
-    no builder fee and no $10 notional floor — `usd_amount` is converted to
+    HIP-4 outcome markets (`#N` asset names) trade as integer contracts and
+    require a $10 USDH minimum order value — `usd_amount` is converted to
     contracts at mid.
 
     `usd_amount` is converted to asset units at the mid price, then **rounded
@@ -933,9 +947,9 @@ async def hyperliquid_place_limit_order(
 ) -> dict[str, Any]:
     """Place a GTC limit order on a Hyperliquid perp / spot / HIP-4 market.
 
-    HIP-4 outcome markets (`#N` asset names) trade as integer contracts with
-    no builder fee. `usd_amount` sizing is not supported for limit outcomes —
-    pass an integer `size`.
+    HIP-4 outcome markets (`#N` asset names) trade as integer contracts and
+    require a $10 USDH minimum order value. `usd_amount` sizing is not
+    supported for limit outcomes — pass an integer `size`.
 
     For leverage / margin mode, call `hyperliquid_update_leverage` first.
 
