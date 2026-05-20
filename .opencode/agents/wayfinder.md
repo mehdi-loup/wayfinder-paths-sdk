@@ -8,6 +8,8 @@ permission:
     wayfinder-research: allow
     wayfinder-visual: allow
     wayfinder-quant: allow
+  external_directory:
+    /wf/user_vault/scripts/*: allow
   wayfinder_*: deny
   wayfinder_core_*: allow
   wayfinder_onchain_*: allow

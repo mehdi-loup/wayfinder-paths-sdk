@@ -6,6 +6,8 @@ permission:
   task:
     "*": deny
   question: deny
+  external_directory:
+    /wf/user_vault/scripts/*: allow
   wayfinder_*: deny
   wayfinder_shells_*: allow
   wayfinder_core_run_script: allow

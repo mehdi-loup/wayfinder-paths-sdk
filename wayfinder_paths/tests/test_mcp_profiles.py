@@ -134,6 +134,17 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
 
 
+def test_opencode_agents_allow_user_vault_script_inspection() -> None:
+    for agent_name in (
+        "wayfinder",
+        "wayfinder-research",
+        "wayfinder-quant",
+        "wayfinder-visual",
+    ):
+        permission = _agent_permission(agent_name)
+        assert permission["external_directory"]["/wf/user_vault/scripts/*"] == "allow"
+
+
 def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
     primary = _agent_permission("wayfinder")
     assert {

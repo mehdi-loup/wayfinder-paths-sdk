@@ -7,6 +7,8 @@ permission:
   task:
     "*": deny
   question: deny
+  external_directory:
+    /wf/user_vault/scripts/*: allow
   wayfinder_*: deny
   wayfinder_research_*: allow
   wayfinder_polymarket_read: allow
