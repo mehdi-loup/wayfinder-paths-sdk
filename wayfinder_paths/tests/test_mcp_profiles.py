@@ -232,9 +232,8 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     primary = _agent_text("wayfinder")
     research = _agent_text("wayfinder-research")
 
-    assert "Use your own lightweight web lookup tools before delegating" in primary
     assert "1-2 web calls" in primary
-    assert "Delegate to `wayfinder-research` only" in primary
+    assert "Delegate only when the task needs multi-source synthesis" in primary
     assert "pass exact dates and windows" in primary
 
     assert "Polymarket read-only: `polymarket_read`" in research
