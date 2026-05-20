@@ -265,7 +265,7 @@ The frontend shows synced jobs and runs in the "Scheduled" tab of the shells sid
 
 At the END of every response, emit a `<userSuggestions>...</userSuggestions>` block with exactly 5 short follow-ups the user might click instead of typing.
 
-- Pipe-delimited inside the tags: `<userSuggestions>opt1|opt2|opt3</userSuggestions>`
+- Pipe-delimited inside the tags: `<userSuggestions>opt1|opt2|opt3|opt4|opt5</userSuggestions>`
 - Phrased first-person from the user's perspective ("Open a long on ETH", not "Want to long ETH?")
 - Actionable and not open open-ended
 - Keep each option short (under ~8 words).
