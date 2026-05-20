@@ -6,6 +6,11 @@ from typing import Any
 
 from wayfinder_paths.core.clients.DeltaLabClient import DELTA_LAB_CLIENT
 from wayfinder_paths.core.constants.chains import CHAIN_CODE_TO_ID
+from wayfinder_paths.mcp.arg_validation import (
+    MCPArgumentError,
+    normalize_int,
+    optional_int,
+)
 from wayfinder_paths.mcp.utils import catch_errors, ok
 
 logger = logging.getLogger(__name__)
@@ -13,24 +18,14 @@ logger = logging.getLogger(__name__)
 _SKIP_VALUES = {"", "_", "all", "none", "null"}
 
 
-def _optional_text(value: str) -> str | None:
+def _optional_text(value: str | int) -> str | None:
     normalized = str(value).strip()
     if normalized.lower() in _SKIP_VALUES:
         return None
     return normalized
 
 
-def _optional_int(value: str, *, field_name: str) -> int | None:
-    normalized = _optional_text(value)
-    if normalized is None:
-        return None
-    try:
-        return int(normalized)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be an integer") from exc
-
-
-def _chain_filter(value: str) -> int | None:
+def _chain_filter(value: str | int, *, field_name: str = "chain") -> int | None:
     normalized = _optional_text(value)
     if normalized is None:
         return None
@@ -38,7 +33,15 @@ def _chain_filter(value: str) -> int | None:
         return int(normalized)
     chain_id = CHAIN_CODE_TO_ID.get(normalized.lower())
     if chain_id is None:
-        raise ValueError(f"unknown chain filter: {value!r}")
+        raise MCPArgumentError(
+            f"unknown chain filter: {value!r}",
+            field=field_name,
+            received=value,
+            allowed_values=[
+                *CHAIN_CODE_TO_ID.keys(),
+                *map(str, CHAIN_CODE_TO_ID.values()),
+            ],
+        )
     return chain_id
 
 
@@ -121,7 +124,7 @@ async def _resolve_basis_root(symbol: str) -> str:
 
 @catch_errors
 async def research_get_basis_apy_sources(
-    basis_symbol: str, lookback_days: str = "7", limit: str = "10"
+    basis_symbol: str, lookback_days: str | int = "7", limit: str | int = "10"
 ) -> dict[str, Any]:
     """Get top yield opportunities for a given asset across protocols.
 
@@ -133,8 +136,8 @@ async def research_get_basis_apy_sources(
     Returns:
         Dict with basis info, opportunities grouped by LONG/SHORT, summary stats
     """
-    lookback_int = max(1, int(lookback_days))
-    limit_int = min(1000, max(1, int(limit)))
+    lookback_int = normalize_int(lookback_days, field_name="lookback_days", min_value=1)
+    limit_int = min(1000, normalize_int(limit, field_name="limit", min_value=1))
     resolved = await _resolve_basis_root(basis_symbol.upper())
     return ok(
         await DELTA_LAB_CLIENT.get_basis_apy_sources(
@@ -172,7 +175,7 @@ async def research_get_asset_basis_info(symbol: str) -> dict[str, Any]:
 
 @catch_errors
 async def research_search_delta_lab_assets(
-    query: str, chain: str = "all", limit: str = "25"
+    query: str, chain: str | int = "all", limit: str | int = "25"
 ) -> dict[str, Any]:
     """Search Delta Lab assets by symbol/name/address/coingecko_id.
 
@@ -185,20 +188,11 @@ async def research_search_delta_lab_assets(
     Returns:
         Dict with "assets" list and "total_count"
     """
-    chain_id_param: int | None = None
-    chain_value = chain.strip().lower()
-    if chain_value not in ("all", "_"):
-        if chain_value.isdigit():
-            chain_id_param = int(chain_value)
-        else:
-            chain_id_param = CHAIN_CODE_TO_ID.get(chain_value)
-            if chain_id_param is None:
-                raise ValueError(f"unknown chain filter: {chain!r}")
     return ok(
         await DELTA_LAB_CLIENT.search_assets(
             query=query.strip(),
-            chain_id=chain_id_param,
-            limit=int(limit),
+            chain_id=_chain_filter(chain),
+            limit=normalize_int(limit, field_name="limit", min_value=1),
         )
     )
 
@@ -206,12 +200,12 @@ async def research_search_delta_lab_assets(
 @catch_errors
 async def research_search_delta_lab_markets(
     venue: str = "all",
-    chain: str = "all",
+    chain: str | int = "all",
     marketType: str = "all",
-    assetId: str = "_",
+    assetId: str | int = "_",
     basisRoot: str = "all",
-    limit: str = "25",
-    offset: str = "0",
+    limit: str | int = "25",
+    offset: str | int = "0",
 ) -> dict[str, Any]:
     """Search Delta Lab markets by venue, chain, type, asset id, or basis root.
 
@@ -223,10 +217,10 @@ async def research_search_delta_lab_markets(
             venue=_optional_text(venue),
             chain_id=_chain_filter(chain),
             market_type=_optional_text(marketType),
-            asset_id=_optional_int(assetId, field_name="assetId"),
+            asset_id=optional_int(assetId, field_name="assetId"),
             basis_root=_optional_text(basisRoot.upper()),
-            limit=min(100, max(1, int(limit))),
-            offset=max(0, int(offset)),
+            limit=min(100, normalize_int(limit, field_name="limit", min_value=1)),
+            offset=normalize_int(offset, field_name="offset", min_value=0),
         )
     )
 
@@ -236,12 +230,12 @@ async def research_search_delta_lab_instruments(
     instrumentType: str = "all",
     basisRoot: str = "all",
     venue: str = "all",
-    chain: str = "all",
-    quoteAssetId: str = "_",
+    chain: str | int = "all",
+    quoteAssetId: str | int = "_",
     maturityAfter: str = "_",
     maturityBefore: str = "_",
-    limit: str = "25",
-    offset: str = "0",
+    limit: str | int = "25",
+    offset: str | int = "0",
 ) -> dict[str, Any]:
     """Search Delta Lab instruments, including Pendle PT/YT instruments."""
     return ok(
@@ -250,28 +244,30 @@ async def research_search_delta_lab_instruments(
             basis_root=_optional_text(basisRoot.upper()),
             venue=_optional_text(venue),
             chain_id=_chain_filter(chain),
-            quote_asset_id=_optional_int(quoteAssetId, field_name="quoteAssetId"),
+            quote_asset_id=optional_int(quoteAssetId, field_name="quoteAssetId"),
             maturity_after=_optional_text(maturityAfter),
             maturity_before=_optional_text(maturityBefore),
-            limit=min(100, max(1, int(limit))),
-            offset=max(0, int(offset)),
+            limit=min(100, normalize_int(limit, field_name="limit", min_value=1)),
+            offset=normalize_int(offset, field_name="offset", min_value=0),
         )
     )
 
 
 @catch_errors
 async def research_get_delta_lab_pendle_market(
-    marketID: str,
-    lookbackDays: str = "30",
-    limit: str = "500",
+    marketID: str | int,
+    lookbackDays: str | int = "30",
+    limit: str | int = "500",
 ) -> dict[str, Any]:
     """Get latest and time-series Delta Lab Pendle analytics for one market."""
-    market_id = int(marketID)
+    market_id = normalize_int(marketID, field_name="marketID", min_value=1)
+    lookback_days = normalize_int(lookbackDays, field_name="lookbackDays", min_value=1)
+    limit_int = min(5000, normalize_int(limit, field_name="limit", min_value=1))
     latest = await DELTA_LAB_CLIENT.get_market_pendle_latest(market_id=market_id)
     ts = await DELTA_LAB_CLIENT.get_market_pendle_ts(
         market_id=market_id,
-        lookback_days=max(1, int(lookbackDays)),
-        limit=min(5000, max(1, int(limit))),
+        lookback_days=lookback_days,
+        limit=limit_int,
     )
     return ok(
         {
@@ -279,14 +275,14 @@ async def research_get_delta_lab_pendle_market(
             "latest": latest.raw if latest else None,
             "rows": _df_records(ts),
             "count": 0 if ts is None else len(ts),
-            "lookbackDays": int(lookbackDays),
+            "lookbackDays": lookback_days,
         }
     )
 
 
 @catch_errors
 async def research_get_top_apy(
-    lookback_days: str = "7", limit: str = "25"
+    lookback_days: str | int = "7", limit: str | int = "25"
 ) -> dict[str, Any]:
     """Get top APY opportunities across all basis symbols.
 
@@ -302,8 +298,8 @@ async def research_get_top_apy(
     Returns:
         Dict with top opportunities sorted by APY
     """
-    lookback_int = max(1, int(lookback_days))
-    limit_int = min(500, max(1, int(limit)))
+    lookback_int = normalize_int(lookback_days, field_name="lookback_days", min_value=1)
+    limit_int = min(500, normalize_int(limit, field_name="limit", min_value=1))
     return ok(
         await DELTA_LAB_CLIENT.get_top_apy(
             lookback_days=lookback_int,
@@ -315,7 +311,7 @@ async def research_get_top_apy(
 @catch_errors
 async def research_search_price(
     sort: str = "price_usd",
-    limit: str = "25",
+    limit: str | int = "25",
     basis: str = "all",
 ) -> dict[str, Any]:
     """Screen assets by price features (returns, volatility, drawdowns).
@@ -334,7 +330,7 @@ async def research_search_price(
     Returns:
         Dict with data (list of price feature rows) and count
     """
-    limit_int = min(1000, max(1, int(limit)))
+    limit_int = min(1000, normalize_int(limit, field_name="limit", min_value=1))
     basis_param: str | None = None
     asset_ids_param: list[int] | None = None
     if basis.strip().lower() != "all":
@@ -354,7 +350,7 @@ async def research_search_price(
 @catch_errors
 async def research_search_lending(
     sort: str = "net_supply_apr_now",
-    limit: str = "25",
+    limit: str | int = "25",
     basis: str = "all",
 ) -> dict[str, Any]:
     """Screen lending markets by surface features (supply/borrow APRs, TVL).
@@ -374,7 +370,7 @@ async def research_search_lending(
     Returns:
         Dict with data (list of lending surface feature rows) and count
     """
-    limit_int = min(1000, max(1, int(limit)))
+    limit_int = min(1000, normalize_int(limit, field_name="limit", min_value=1))
     basis_param: str | None = None
     asset_ids_param: list[int] | None = None
     if basis.strip().lower() != "all":
@@ -395,7 +391,7 @@ async def research_search_lending(
 @catch_errors
 async def research_search_perp(
     sort: str = "funding_now",
-    limit: str = "25",
+    limit: str | int = "25",
     basis: str = "all",
 ) -> dict[str, Any]:
     """Screen perpetual markets by surface features (funding, basis, OI).
@@ -415,7 +411,7 @@ async def research_search_perp(
     Returns:
         Dict with data (list of perp surface feature rows) and count
     """
-    limit_int = min(1000, max(1, int(limit)))
+    limit_int = min(1000, normalize_int(limit, field_name="limit", min_value=1))
     basis_param: str | None = None
     asset_ids_param: list[int] | None = None
     if basis.strip().lower() != "all":
@@ -435,10 +431,10 @@ async def research_search_perp(
 @catch_errors
 async def research_search_borrow_routes(
     sort: str = "ltv_max",
-    limit: str = "25",
+    limit: str | int = "25",
     basis: str = "all",
     borrow_basis: str = "all",
-    chain_id: str = "all",
+    chain_id: str | int = "all",
 ) -> dict[str, Any]:
     """Screen borrow routes (collateral → borrow) by route configuration.
 
@@ -457,7 +453,7 @@ async def research_search_borrow_routes(
     Returns:
         Dict with data (list of borrow route rows) and count
     """
-    limit_int = min(1000, max(1, int(limit)))
+    limit_int = min(1000, normalize_int(limit, field_name="limit", min_value=1))
     basis_param: str | None = None
     asset_ids_param: list[int] | None = None
     if basis.strip().lower() != "all":
@@ -470,15 +466,6 @@ async def research_search_borrow_routes(
         borrow_basis_param, borrow_asset_ids_param = await _resolve_basis_filter(
             borrow_basis.strip().upper()
         )
-    chain_id_param: int | None = None
-    chain_value = chain_id.strip().lower()
-    if chain_value not in ("all", "_"):
-        if chain_value.isdigit():
-            chain_id_param = int(chain_value)
-        else:
-            chain_id_param = CHAIN_CODE_TO_ID.get(chain_value)
-            if chain_id_param is None:
-                raise ValueError(f"unknown chain filter: {chain_id!r}")
     return ok(
         await DELTA_LAB_CLIENT.screen_borrow_routes(
             sort=sort.strip(),
@@ -487,6 +474,6 @@ async def research_search_borrow_routes(
             asset_ids=asset_ids_param,
             borrow_basis=borrow_basis_param,
             borrow_asset_ids=borrow_asset_ids_param,
-            chain_id=chain_id_param,
+            chain_id=_chain_filter(chain_id, field_name="chain_id"),
         )
     )

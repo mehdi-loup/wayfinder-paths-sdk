@@ -18,7 +18,7 @@ def _safe_segment(value: str | None, *, default: str) -> str:
     return safe or default
 
 
-def monitor_state_path(name: str) -> Path:
+def monitor_state_path(name: str | None = None) -> Path:
     """Return a durable per-job monitor state path under the runner directory."""
     runner_dir = get_runner_paths().runner_dir
     namespace = _safe_segment(
@@ -54,7 +54,7 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def read_monitor_state(
-    name: str, default: dict[str, Any] | None = None
+    name: str | None = None, default: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Read a monitor state object, returning `default` when it does not exist."""
     path = monitor_state_path(name)
@@ -67,8 +67,16 @@ def read_monitor_state(
     return payload
 
 
-def write_monitor_state(name: str, payload: dict[str, Any]) -> Path:
+def write_monitor_state(
+    name: str | dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> Path:
     """Write a monitor state object and return the path used."""
-    path = monitor_state_path(name)
+    if payload is None and isinstance(name, dict):
+        payload = name
+        name = None
+    if payload is None:
+        raise ValueError("payload is required")
+    path = monitor_state_path(name if isinstance(name, str) else None)
     atomic_write_json(path, payload)
     return path

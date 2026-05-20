@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,10 @@ from wayfinder_paths.runner.paths import RunnerPaths
 from wayfinder_paths.runner.script_resolver import resolve_script_path
 
 JOB_RESULT_MARKER = "WAYFINDER_JOB_RESULT "
+SESSION_ENV_KEYS = (
+    "OPENCODE_SESSION_ID",
+    "OPENCODE_SESSIONID",
+)
 
 
 def _utc_epoch_s() -> int:
@@ -325,30 +330,94 @@ class RunnerDaemon:
             0, self._running_by_job.get(rp.job_id, 1) - 1
         )
 
-        self._notify_session(rp, status=status, error_text=error_text)
+        self._run_side_effect(
+            f"notify-session-{rp.job_name}",
+            lambda: self._notify_session(rp, status=status, error_text=error_text),
+        )
 
         if is_opencode_instance():
-            log_output = ""
-            try:
-                log_output = rp.log_path.read_text(errors="replace")
-            except Exception:  # noqa: BLE001
-                pass
-            SCHEDULED_JOBS_CLIENT.report_run(
-                rp.job_name,
-                {
-                    "run_id": str(rp.run_id),
-                    "status": status,
-                    "started_at": datetime.fromtimestamp(
-                        rp.started_at, tz=UTC
-                    ).isoformat(),
-                    "finished_at": datetime.fromtimestamp(
-                        finished_at, tz=UTC
-                    ).isoformat(),
-                    "exit_code": exit_code,
-                    "log_output": log_output,
-                },
+            self._run_side_effect(
+                f"report-run-{rp.job_name}",
+                lambda: self._report_finished_run(
+                    rp,
+                    finished_at=finished_at,
+                    status=status,
+                    exit_code=exit_code,
+                ),
             )
-            self._sync_job(rp.job_name)
+
+    def _run_side_effect(self, label: str, callback: Callable[[], None]) -> None:
+        def _target() -> None:
+            try:
+                callback()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Runner side effect {label} failed: {exc}")
+
+        thread = threading.Thread(
+            target=_target,
+            name=f"wayfinder-runner-{_safe_job_dirname(label)}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _report_finished_run(
+        self,
+        rp: RunningProcess,
+        *,
+        finished_at: int,
+        status: str,
+        exit_code: int | None,
+    ) -> None:
+        log_output = ""
+        try:
+            log_output = rp.log_path.read_text(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+        SCHEDULED_JOBS_CLIENT.report_run(
+            rp.job_name,
+            {
+                "run_id": str(rp.run_id),
+                "status": status,
+                "started_at": datetime.fromtimestamp(rp.started_at, tz=UTC).isoformat(),
+                "finished_at": datetime.fromtimestamp(finished_at, tz=UTC).isoformat(),
+                "exit_code": exit_code,
+                "log_output": log_output,
+            },
+        )
+        self._sync_job(rp.job_name)
+
+    def _sync_job_async(self, name: str) -> None:
+        if is_opencode_instance():
+            self._run_side_effect(f"sync-job-{name}", lambda: self._sync_job(name))
+
+    def _delete_remote_job_async(self, name: str) -> None:
+        if is_opencode_instance():
+            self._run_side_effect(
+                f"delete-remote-job-{name}",
+                lambda: SCHEDULED_JOBS_CLIENT.delete_job(name),
+            )
+
+    def _bind_runner_session_async(self, name: str) -> None:
+        if not is_opencode_instance():
+            return
+
+        def _bind() -> None:
+            session_id = OPENCODE_CLIENT.find_runner_session()
+            if not session_id:
+                return
+            try:
+                job, _ = self._db.get_job(name=name)
+            except KeyError:
+                return
+            payload = dict(job.payload or {})
+            if payload.get("notify_session_id"):
+                return
+            payload["notify_session_id"] = session_id
+            self._db.update_job(name=name, payload=payload, interval_seconds=None)
+            logger.info(f"Auto-bound job {name} to session {session_id}")
+            self._sync_job(name)
+
+        self._run_side_effect(f"bind-runner-session-{name}", _bind)
 
     def _sync_job(self, name: str) -> None:
         if not is_opencode_instance():
@@ -387,7 +456,7 @@ class RunnerDaemon:
         error_text: str | None,
     ) -> None:
         job, _ = self._db.get_job(name=running_process.job_name)
-        session_id = job.payload["notify_session_id"]
+        session_id = job.payload.get("notify_session_id")
 
         if session_id is None or not OPENCODE_CLIENT.healthy():
             return
@@ -742,9 +811,13 @@ class RunnerDaemon:
             env = payload_norm.get("env")
             if env is not None and not isinstance(env, dict):
                 return {"ok": False, "error": "payload.env must be an object"}
-        session_id = OPENCODE_CLIENT.find_runner_session()
+        session_id = payload_norm.get("notify_session_id")
+        if session_id is None:
+            session_id = next(
+                (os.environ[key] for key in SESSION_ENV_KEYS if os.environ.get(key)),
+                None,
+            )
         payload_norm["notify_session_id"] = session_id
-        logger.info(f"Auto-bound job {name} to session {session_id}")
 
         try:
             job_id = self._db.add_job(
@@ -757,7 +830,9 @@ class RunnerDaemon:
             )
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
-        self._sync_job(name)
+        if session_id is None:
+            self._bind_runner_session_async(name)
+        self._sync_job_async(name)
         return {"ok": True, "result": {"job_id": job_id, "name": name}}
 
     def ctl_update_job(
@@ -769,7 +844,7 @@ class RunnerDaemon:
             self._db.update_job(
                 name=name, payload=payload, interval_seconds=interval_seconds
             )
-            self._sync_job(name)
+            self._sync_job_async(name)
             return {"ok": True, "result": {"name": name}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -777,7 +852,7 @@ class RunnerDaemon:
     def ctl_pause_job(self, *, name: str) -> dict[str, Any]:
         try:
             self._db.set_job_status(name=name, status=JobStatus.PAUSED)
-            self._sync_job(name)
+            self._sync_job_async(name)
             return {"ok": True, "result": {"name": name, "status": JobStatus.PAUSED}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -787,7 +862,7 @@ class RunnerDaemon:
             job, _ = self._db.get_job(name=name)
             self._db.set_job_status(name=name, status=JobStatus.ACTIVE)
             self._db.set_next_run_at(job_id=job.id, next_run_at=_utc_epoch_s())
-            self._sync_job(name)
+            self._sync_job_async(name)
             return {"ok": True, "result": {"name": name, "status": JobStatus.ACTIVE}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -870,6 +945,5 @@ class RunnerDaemon:
                 return {"ok": False, "error": str(exc)}
             self._running_by_job.pop(job_id, None)
 
-        if is_opencode_instance():
-            SCHEDULED_JOBS_CLIENT.delete_job(str(name))
+        self._delete_remote_job_async(str(name))
         return {"ok": True, "result": {"name": str(name), "deleted": True}}

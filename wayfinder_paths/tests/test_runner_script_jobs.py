@@ -90,6 +90,63 @@ def test_daemon_adds_script_job_with_relative_path(tmp_path: Path) -> None:
     assert not Path(stored).is_absolute()
 
 
+def test_daemon_add_job_uses_runtime_session_without_opencode_scan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    p = _paths(tmp_path)
+    runs_dir = tmp_path / ".wayfinder_runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    script = runs_dir / "hello.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+
+    daemon = RunnerDaemon(paths=p)
+    monkeypatch.setenv("OPENCODE_SESSION_ID", "ses_env")
+    monkeypatch.setattr(
+        OPENCODE_CLIENT,
+        "find_runner_session",
+        lambda: (_ for _ in ()).throw(AssertionError("should not scan")),
+    )
+    monkeypatch.setattr(daemon, "_sync_job_async", lambda _name: None)
+
+    resp = daemon.ctl_add_job(
+        name="script-job",
+        job_type="script",
+        payload={"script_path": str(script), "args": []},
+        interval_seconds=60,
+    )
+
+    assert resp["ok"] is True
+    job, _ = daemon._db.get_job(name="script-job")
+    assert job.payload["notify_session_id"] == "ses_env"
+
+
+def test_daemon_add_job_defers_session_scan_when_session_unknown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    p = _paths(tmp_path)
+    runs_dir = tmp_path / ".wayfinder_runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    script = runs_dir / "hello.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+
+    daemon = RunnerDaemon(paths=p)
+    monkeypatch.delenv("OPENCODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("OPENCODE_SESSIONID", raising=False)
+    monkeypatch.setattr(daemon, "_sync_job_async", lambda _name: None)
+    bound: list[str] = []
+    monkeypatch.setattr(daemon, "_bind_runner_session_async", bound.append)
+
+    resp = daemon.ctl_add_job(
+        name="script-job",
+        job_type="script",
+        payload={"script_path": str(script), "args": []},
+        interval_seconds=60,
+    )
+
+    assert resp["ok"] is True
+    assert bound == ["script-job"]
+
+
 def test_notify_session_skips_routine_success(tmp_path: Path, monkeypatch) -> None:
     p = _paths(tmp_path)
     log = p.logs_dir / "job.log"

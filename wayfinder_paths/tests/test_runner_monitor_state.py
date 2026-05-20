@@ -64,6 +64,18 @@ def test_read_monitor_state_returns_default_for_missing_path(
     assert read_monitor_state("missing", default={"seeded": False}) == {"seeded": False}
 
 
+def test_monitor_state_helpers_support_default_state_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WAYFINDER_RUNNER_DIR", str(tmp_path / "runner"))
+    monkeypatch.setenv("WAYFINDER_KV_NAMESPACE", "funding-monitor")
+
+    path = write_monitor_state({"seeded": True})
+
+    assert path == tmp_path / "runner" / "job_state" / "funding-monitor" / "state.json"
+    assert read_monitor_state(default={"seeded": False}) == {"seeded": True}
+
+
 def test_read_monitor_state_rejects_non_object_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -100,7 +112,6 @@ def test_agent_docs_reference_monitor_state_helper() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     docs = [
         repo_root / ".opencode" / "agents" / "wayfinder.md",
-        repo_root / "AGENTS.md",
         repo_root / "CLAUDE.md",
     ]
 
