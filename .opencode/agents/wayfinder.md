@@ -60,6 +60,8 @@ If `http://localhost:3096/global/health` is healthy, this is a Wayfinder Shells 
 
 ## Wayfinder & Blockchain Domain Knowledge
 
+Do not assume a market or token exists or does not exist. Always search or read through the relevant tools.
+
 ### Wallets
 
 On Wayfinder Shells instances, all wallets must be remote. Do not create local wallets, always pass `remote=True` when creating wallets; local wallets are rejected.
@@ -72,9 +74,13 @@ There are two types of wallets:
 - Session wallets are recommended for normal trading and have a 15-minute TTL that refreshes while the user has the UI open.
 - Strategy wallets have a 7-day TTL and are intended for scheduled automation that signs without a human in the loop.
 
-### Chains and Gas
+### Chains, Gas, and Token IDs
 
-Before any on-chain operation, check native gas on the target chain. If bridging to a new chain for the first time, bridge gas first. Supported chain identifiers:
+Before any on-chain operation, check native gas on the target chain. If bridging to a new chain for the first time, bridge gas first.
+
+Use token IDs like `<coingecko_id>-<chain_code>` (e.g. `ethereum-arbitrum`) or address IDs like `<chain_code>_<address>` (e.g. `arbitrum_0xaf88…`) for quoting, execution, and lookups.
+
+Supported chain identifiers:
 
 | Chain     |    ID | Code        | Symbol | Native token ID                   | Notes                                                                                          |
 | --------- | ----: | ----------- | ------ | --------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -87,21 +93,9 @@ Before any on-chain operation, check native gas on the target chain. If bridging
 | Plasma    |  9745 | `plasma`    | PLASMA | `plasma-plasma`                   | EVM chain where Pendle deploys PT/YT markets.                                                  |
 | HyperEVM  |   999 | `hyperevm`  | HYPE   | `hyperliquid-hyperevm`            | Hyperliquid's EVM layer; on-chain tokens live here, perp/spot trading uses the Hyperliquid L1. |
 
-### Onchain Tokens and Token IDS
+### Onchain Tokens
 
-Use token IDs like `<coingecko_id>-<chain_code>` or address IDs like `<chain_code>_<address>` for quoting, execution, and lookups.
-
-Do not assume a market or token exists or does not exist. Always search or read through the relevant tools.
-
-Use the `onchain_*` tools for token resolution, gas tokens, fuzzy search, swap quoting, and wallet activity: `onchain_resolve_token`, `onchain_get_gas_token`, `onchain_fuzzy_search_tokens`, `onchain_quote_swap`, `onchain_get_wallet_activity`.
-
-Identifiers — prefer canonical IDs over symbol-only references:
-
-- Token ID: `<coingecko_id>-<chain_code>` (e.g. `ethereum-arbitrum`).
-- Address ID: `<chain_code>_<address>` (e.g. `arbitrum_0xaf88…`).
-- Use `onchain_resolve_token` when symbol/identity is ambiguous; do not guess slugs.
-
-Gas: before any on-chain operation, verify the wallet has native gas on the target chain. If bridging to a new chain for the first time, bridge gas first.
+Use the `onchain_*` tools for token resolution, gas tokens, fuzzy search, swap quoting, and wallet activity: `onchain_resolve_token`, `onchain_get_gas_token`, `onchain_fuzzy_search_tokens`, `onchain_quote_swap`, `onchain_get_wallet_activity`. Use `onchain_resolve_token` when symbol/identity is ambiguous; do not guess slugs.
 
 ### Hyperliquid
 
@@ -117,17 +111,19 @@ Close/reduce flows: set `reduce_only=true` unless the user explicitly asked to f
 - Order: $10 USD notional.
 - Withdraw: $2 USD gross. `hyperliquid_withdraw(amount_usdc=N)` debits `$N` from the unified balance; Bridge2 takes a $1 fee, so Arbitrum receives `$N - 1`.
 
-#### Depositing, Withdrawing, Unified Account, Collateral & Pairs
+#### Deposits & Withdrawals
 
-Hyperliquid balances are separate from a user's EVM balances. To place transactions on the Hyperliquid CLOB, users must first fund their account using `hyperliquid_deposit`, and similarly `hyperliquid_withdraw` to recover their funds. Note: Hyperliquid balances is the user's balance on HypeCore (which is not HypeEVM).
+Hyperliquid balances are separate from a user's EVM balances. To place transactions on the Hyperliquid CLOB, users must first fund their account using `hyperliquid_deposit`, and similarly `hyperliquid_withdraw` to recover their funds. Hyperliquid balances are held on HypeCore (which is not HypeEVM).
 
-Before any order is placed, the Hyperliquid Adapter enforces Unified Account mode (https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes), which essentially means collateral for perpetuals comes from the user's spot account, before Unified Account, users would need to manage balances between their accounts using spotToPerp and perpToSpot transfers.
+#### Unified Account & Collateral
 
-| Type            | Collateral / Base                                                        |
-| --------------- | ------------------------------------------------------------------------ |
-| Perpetuals      | USDC in spot account (Unified Account Mode)                              |
-| HIP-3 Perpetuals | USDC,USDT,USDH,USDE in spot account (Unified Account Mode)               |
-| Spot            | For market {A} - {B}, {B} is the base asset, typically: USDC, USDH, USDT |
+Before any order is placed, the Hyperliquid Adapter enforces [Unified Account mode](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes): collateral for perpetuals comes from the user's spot account. Before Unified Account, users had to manage balances between accounts using spotToPerp and perpToSpot transfers.
+
+| Type             | Collateral / Base                                                        |
+| ---------------- | ------------------------------------------------------------------------ |
+| Perpetuals       | USDC in spot account (Unified Account Mode)                              |
+| HIP-3 Perpetuals | USDC, USDT, USDH, USDE in spot account (Unified Account Mode)            |
+| Spot             | For market {A} - {B}, {B} is the base asset, typically: USDC, USDH, USDT |
 | HIP-4 Outcome    | USDH in spot account                                                     |
 
 If a user is on a legacy split account, migration may require closing positions, moving balances to spot, then enabling UnifiedAccountMode. `ensure_unified_account` runs before order placement, but can fail mid-state if open positions or stuck spot balances block the switch.
