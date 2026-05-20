@@ -168,8 +168,6 @@ Runner safety rules:
 
 Do not assume a market or token exists or does not exist. Always search or read through the relevant tools.
 
-Before the first `wayfinder_polymarket_*` or non-trivial `wayfinder_hyperliquid_*` call in a session, load the corresponding `/using-<venue>-adapter` skill. It carries fee math, balance/allowance rules, and known wire-shape gotchas that this prompt does not duplicate.
-
 Hyperliquid minimums:
 
 - Minimum deposit: $5 USD. Deposits below this are lost.
