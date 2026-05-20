@@ -59,7 +59,7 @@ def test_mcp_catalog_exposes_expected_non_shell_tools() -> None:
     assert "core_execute" in names
     assert "core_run_script" in names
     assert "core_runner" in names
-    assert "research_web_search" in names
+    assert "core_web_search" in names
     assert "research_get_top_apy" in names
     assert "research_search_delta_lab_markets" in names
     assert "research_search_delta_lab_instruments" in names
@@ -95,8 +95,6 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert primary["wayfinder_hyperliquid_*"] == "allow"
     assert primary["wayfinder_polymarket_*"] == "allow"
     assert primary["wayfinder_contracts_*"] == "allow"
-    assert primary["wayfinder_research_web_search"] == "allow"
-    assert primary["wayfinder_research_web_fetch"] == "allow"
     assert "wayfinder_research_*" not in primary
     assert primary["wayfinder_core_run_script"] == "ask"
     assert primary["wayfinder_core_execute"] == "ask"
@@ -116,6 +114,8 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert "wayfinder_polymarket_deposit" not in research
     assert research["wayfinder_core_get_adapters_and_strategies"] == "allow"
     assert research["wayfinder_core_run_script"] == "allow"
+    assert research["wayfinder_core_web_search"] == "allow"
+    assert research["wayfinder_core_web_fetch"] == "allow"
     _assert_rule_order(research, "wayfinder_*", "wayfinder_research_*")
     _assert_rule_order(research, "wayfinder_*", "wayfinder_polymarket_read")
 
@@ -123,11 +123,15 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert quant["wayfinder_research_*"] == "allow"
     assert quant["wayfinder_core_get_adapters_and_strategies"] == "allow"
     assert quant["wayfinder_core_run_script"] == "allow"
+    assert quant["wayfinder_core_web_search"] == "allow"
+    assert quant["wayfinder_core_web_fetch"] == "allow"
     _assert_rule_order(quant, "wayfinder_*", "wayfinder_research_*")
 
     assert visual["wayfinder_*"] == "deny"
     assert visual["wayfinder_shells_*"] == "allow"
     assert visual["wayfinder_core_run_script"] == "allow"
+    assert visual["wayfinder_core_web_search"] == "allow"
+    assert visual["wayfinder_core_web_fetch"] == "allow"
     _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
 
 
@@ -142,8 +146,6 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_hyperliquid_*": "allow",
         "wayfinder_polymarket_*": "allow",
         "wayfinder_contracts_*": "allow",
-        "wayfinder_research_web_search": "allow",
-        "wayfinder_research_web_fetch": "allow",
         "wayfinder_core_execute": "ask",
         "wayfinder_core_run_script": "ask",
         "wayfinder_core_run_strategy": "ask",
@@ -162,7 +164,6 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_contracts_execute": "ask",
     }
     _assert_rule_order(primary, "wayfinder_*", "wayfinder_core_*")
-    _assert_rule_order(primary, "wayfinder_*", "wayfinder_research_web_search")
     _assert_rule_order(primary, "wayfinder_core_*", "wayfinder_core_run_script")
     _assert_rule_order(primary, "wayfinder_contracts_*", "wayfinder_contracts_deploy")
 
@@ -177,6 +178,8 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_polymarket_read": "allow",
         "wayfinder_core_get_adapters_and_strategies": "allow",
         "wayfinder_core_run_script": "allow",
+        "wayfinder_core_web_search": "allow",
+        "wayfinder_core_web_fetch": "allow",
     }
     _assert_rule_order(research, "wayfinder_*", "wayfinder_research_*")
     _assert_rule_order(research, "wayfinder_*", "wayfinder_polymarket_read")
@@ -191,6 +194,8 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_research_*": "allow",
         "wayfinder_core_get_adapters_and_strategies": "allow",
         "wayfinder_core_run_script": "allow",
+        "wayfinder_core_web_search": "allow",
+        "wayfinder_core_web_fetch": "allow",
     }
     _assert_rule_order(quant, "wayfinder_*", "wayfinder_research_*")
 
@@ -203,6 +208,8 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_*": "deny",
         "wayfinder_shells_*": "allow",
         "wayfinder_core_run_script": "allow",
+        "wayfinder_core_web_search": "allow",
+        "wayfinder_core_web_fetch": "allow",
     }
     _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
 

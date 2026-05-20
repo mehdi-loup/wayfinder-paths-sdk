@@ -106,10 +106,10 @@ from wayfinder_paths.mcp.tools.polymarket import (
 )
 from wayfinder_paths.mcp.tools.quotes import onchain_quote_swap
 from wayfinder_paths.mcp.tools.research_gateway import (
+    core_web_fetch,
+    core_web_search,
     research_crypto_sentiment,
     research_social_x_search,
-    research_web_fetch,
-    research_web_search,
 )
 from wayfinder_paths.mcp.tools.run_script import core_run_script
 from wayfinder_paths.mcp.tools.runner import core_runner
@@ -148,6 +148,8 @@ def build_mcp(
     mcp.tool()(core_get_adapters_and_strategies)
     mcp.tool()(core_get_wallets)
     mcp.tool()(core_wallets)
+    mcp.tool()(core_web_search)
+    mcp.tool()(core_web_fetch)
     mcp.tool()(core_execute)
     mcp.tool()(core_run_script)
     mcp.tool()(core_run_strategy)
@@ -186,8 +188,6 @@ def build_mcp(
     # ─── research_* ────────────────────────────────────────────────────
     # Bulk / time-series delta-lab lives in DELTA_LAB_CLIENT (Python), not MCP —
     # see the /using-delta-lab skill.
-    mcp.tool()(research_web_search)
-    mcp.tool()(research_web_fetch)
     mcp.tool()(research_crypto_sentiment)
     mcp.tool()(research_social_x_search)
     mcp.tool()(research_defillama_free)
