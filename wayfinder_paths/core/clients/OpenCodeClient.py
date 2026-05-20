@@ -8,7 +8,7 @@ from loguru import logger
 
 from wayfinder_paths.runner.constants import ADD_JOB_CLI_VERB, ADD_JOB_MCP_ACTION
 
-OPENCODE_DEFAULT_URL = "http://localhost:4096"
+OPENCODE_DEFAULT_URL = "http://localhost:3096"
 
 
 class OpenCodeClient:
