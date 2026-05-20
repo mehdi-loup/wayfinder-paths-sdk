@@ -143,6 +143,7 @@ Hyperliquid UnifiedAccount mode (repo default):
 
 - Spot + perp share one collateral balance — **no spot ↔ perp transfers** (they don't exist and will fail).
 - Deposits land in the **unified balance**, surfaced via `spotClearinghouseState` as the `USDC` coin. Perp `marginSummary.accountValue` stays `0` — that's expected, not a failed deposit.
+- Account-level free USDC is `spotClearinghouseState` USDC `total - hold`. This is useful context, but order sizing must use `activeAssetData.availableToTrade` for the exact asset and side. `tokenToAvailableAfterMaintenance` is a maintenance/liquidation buffer field, not "free to open more risk".
 
 - Hyperliquid surfaces in the adapter/MCP: perp, spot, HIP-3 builder-deployed perp dexes (`xyz`/`flx`/`vntl`/`hyna`/`km`...), and HIP-4 outcome markets (binary/multi-outcome prediction contracts). Outcomes use a separate asset-id space (`100_000_000 + 10*outcome_id + side`) and integer contract sizes; **settle in USDH** (token 360), not USDC; settle daily at 06:00 UTC. They go through the same `hyperliquid_place_market_order` / `hyperliquid_place_limit_order` tools — pass `asset_name="#<encoding>"` and the tool dispatches the outcome path (no builder fee, integer contracts). See `/using-hyperliquid-adapter` rules for details.
 
@@ -252,6 +253,7 @@ On Wayfinder Shells instances (`OPENCODE_INSTANCE_ID` set), the runner daemon au
 - **Job sync**: When a job is added, updated, paused, resumed, or deleted, the daemon pushes the current state to `PUT /instances/{id}/jobs/{name}/`
 - **Run sync**: After each run completes, the daemon pushes the full log output to `POST /instances/{id}/jobs/{name}/runs/`
 - **Local-only**: On non-Shells instances (no `OPENCODE_INSTANCE_ID`), sync is skipped silently
+- **Monitor state**: Generated monitor scripts must use `wayfinder_paths.runner.monitor_state` (`read_monitor_state`, `write_monitor_state`) for durable JSON state under `$WAYFINDER_RUNNER_DIR/job_state/$WAYFINDER_KV_NAMESPACE/`. Never store monitor/checkpoint/alert state in `/tmp`.
 
 The frontend shows synced jobs and runs in the "Scheduled" tab of the shells sidebar.
 

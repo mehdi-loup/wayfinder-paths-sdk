@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 from wayfinder_paths.core.clients.OpenCodeClient import OPENCODE_CLIENT
 from wayfinder_paths.runner.constants import JOB_TYPE_SCRIPT, RunStatus
@@ -229,3 +230,76 @@ def test_notify_session_posts_success_with_job_result_marker(
     assert '"status": "OK"' in calls[0]
     assert '"message": "Funding crossover detected"' in calls[0]
     assert "Research whether to unroll the position." in calls[0]
+
+
+def test_job_timeout_zero_disables_timeout(tmp_path: Path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    runs_dir = tmp_path / ".wayfinder_runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    script = runs_dir / "hello.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+
+    daemon = RunnerDaemon(paths=p)
+    daemon._db.add_job(
+        name="no-timeout-job",
+        job_type=JOB_TYPE_SCRIPT,
+        payload={"script_path": ".wayfinder_runs/hello.py", "timeout_seconds": 0},
+        interval_seconds=60,
+    )
+
+    popen = Mock()
+    popen.pid = 12345
+    monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: popen)
+
+    job, _ = daemon._db.get_job(name="no-timeout-job")
+    run_id = daemon._maybe_start_job(
+        job={
+            "id": job.id,
+            "name": job.name,
+            "type": job.type,
+            "payload": job.payload,
+            "interval_seconds": job.interval_seconds,
+        },
+        now=1,
+        reason="test",
+    )
+
+    assert run_id is not None
+    assert daemon._running[int(run_id)].timeout_seconds is None
+
+
+def test_stop_job_kills_running_worker(tmp_path: Path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    daemon = RunnerDaemon(paths=p)
+    daemon._db.add_job(
+        name="running-job",
+        job_type=JOB_TYPE_SCRIPT,
+        payload={"script_path": ".wayfinder_runs/hello.py"},
+        interval_seconds=60,
+    )
+    job, _ = daemon._db.get_job(name="running-job")
+    popen = Mock()
+    popen.pid = 12345
+    log = p.logs_dir / "job.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    daemon._running[7] = RunningProcess(
+        run_id=7,
+        job_id=job.id,
+        job_name="running-job",
+        started_at=0,
+        timeout_seconds=None,
+        popen=popen,
+        log_path=log,
+    )
+
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "wayfinder_paths.runner.daemon._kill_process_group",
+        lambda pid, *, sig: killed.append((pid, sig)),
+    )
+
+    resp = daemon.ctl_stop_job(name="running-job", sig="INT")
+
+    assert resp["ok"] is True
+    assert resp["result"]["killed"] == [{"run_id": 7, "pid": 12345}]
+    assert killed == [(12345, 2)]

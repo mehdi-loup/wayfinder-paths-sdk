@@ -515,6 +515,20 @@ class HyperliquidAdapter(BaseAdapter):
             self.logger.error(f"Failed to fetch spot_user_state for {address}: {exc}")
             return False, str(exc)
 
+    async def get_user_abstraction(
+        self, address: str
+    ) -> tuple[Literal[True], Any] | tuple[Literal[False], str]:
+        try:
+            data = await asyncio.to_thread(
+                get_info().post,
+                "/info",
+                {"type": "userAbstraction", "user": address},
+            )
+            return True, data
+        except Exception as exc:
+            self.logger.error(f"Failed to fetch user_abstraction for {address}: {exc}")
+            return False, str(exc)
+
     async def get_full_user_state(
         self,
         *,

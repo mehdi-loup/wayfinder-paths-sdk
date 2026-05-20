@@ -51,6 +51,7 @@ async def core_runner(
         "update_job",
         "pause_job",
         "resume_job",
+        "stop_job",
         "delete_job",
         "run_once",
         "job_runs",
@@ -72,6 +73,7 @@ async def core_runner(
     limit: int | None = None,
     run_id: int | None = None,
     tail_bytes: int | None = None,
+    sig: Literal["TERM", "INT", "KILL"] | None = None,
     # Strategy payload fields
     strategy: str | None = None,
     strategy_action: str | None = None,
@@ -107,7 +109,8 @@ async def core_runner(
           * `script` — pass `script_path` (inside `.wayfinder_runs/`), optional `args`, `env`,
             `timeout_seconds`.
       - `update_job`: mutate an existing job's payload / interval.
-      - `pause_job` / `resume_job` / `delete_job`: by `name`.
+      - `pause_job` / `resume_job` / `stop_job` / `delete_job`: by `name`.
+        `stop_job` sends `sig` (`TERM`, `INT`, or `KILL`) to a currently running worker.
       - `run_once`: trigger an immediate run of `name` (off the schedule).
 
     Inspection actions:
@@ -119,8 +122,11 @@ async def core_runner(
       - If `add_job`, `delete_job`, `update_job`, or `run_once` times out at the
         caller, treat the mutation result as unknown and inspect `status`,
         `job_runs`, or `run_report` before retrying.
-      - Generated monitor scripts should keep durable state under the runner
-        directory or `.wayfinder_runs/state`, not `/tmp`.
+      - Generated monitor scripts should keep durable state with
+        `wayfinder_paths.runner.monitor_state` (`monitor_state_path`,
+        `read_monitor_state`, `write_monitor_state`). This stores JSON under
+        `$WAYFINDER_RUNNER_DIR/job_state/$WAYFINDER_KV_NAMESPACE/`; never store
+        monitor/checkpoint/alert state in `/tmp`.
       - First/seed runs should not send external alerts unless explicitly
         requested. Position-bound monitors should verify live side, size,
         leverage/mode, and notional before alerting.
@@ -446,6 +452,19 @@ async def core_runner(
                 if not name:
                     return err("invalid_request", "name is required for resume_job")
                 resp = client.call("resume_job", {"name": str(name).strip()})
+                if resp.get("ok"):
+                    return ok(resp.get("result"))
+                return err(
+                    "runner_error", str(resp.get("error") or "unknown"), details=resp
+                )
+
+            case "stop_job":
+                if not name:
+                    return err("invalid_request", "name is required for stop_job")
+                resp = client.call(
+                    "stop_job",
+                    {"name": str(name).strip(), "sig": str(sig or "TERM").upper()},
+                )
                 if resp.get("ok"):
                     return ok(resp.get("result"))
                 return err(

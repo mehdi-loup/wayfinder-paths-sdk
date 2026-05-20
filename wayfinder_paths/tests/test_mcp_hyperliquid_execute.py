@@ -71,7 +71,21 @@ class _FakeExecutionAdapter:
         return True, self.user_state
 
     async def get_spot_user_state(self, _address: str):
-        return True, {"balances": []}
+        return True, {
+            "balances": [
+                {
+                    "coin": "USDC",
+                    "token": 0,
+                    "total": "21.50",
+                    "hold": "20.57",
+                    "entryNtl": "0.0",
+                }
+            ],
+            "tokenToAvailableAfterMaintenance": [[0, "19.94"]],
+        }
+
+    async def get_user_abstraction(self, _address: str):
+        return True, "unifiedAccount"
 
     async def get_active_asset_data(self, _address: str, _asset_name: str):
         return True, self.active_asset_data
@@ -219,8 +233,17 @@ async def test_hyperliquid_get_state_includes_active_asset_trade_context():
     context = out["result"]["trade_context"]
     assert context["available_to_trade_long_usd"] == 12.34
     assert context["available_to_trade_short_usd"] == 56.78
+    assert context["available_to_trade_margin_long_usd"] == 12.34
+    assert context["available_margin_long_usd"] == 12.34
+    assert context["max_order_notional_long_usd"] == pytest.approx(12.0)
     assert context["position"]["side"] == "short"
     assert context["position"]["margin_mode"] == "cross"
+    assert context["account_collateral"]["free_usdc"] == pytest.approx(0.93)
+    assert out["result"]["account_collateral"]["free_usdc"] == pytest.approx(0.93)
+    assert (
+        out["result"]["account_collateral"]["available_after_maintenance_usdc"] == 19.94
+    )
+    assert out["result"]["account_abstraction"]["state"] == "unifiedAccount"
 
 
 @pytest.mark.asyncio
@@ -253,7 +276,16 @@ async def test_hyperliquid_market_order_requires_reduce_only_for_opposite_positi
 
 @pytest.mark.asyncio
 async def test_hyperliquid_market_order_reports_material_underfill_as_partial():
-    fake = _FakeExecutionAdapter(filled_size="2.09", fill_price="100")
+    fake = _FakeExecutionAdapter(
+        active_asset_data={
+            "availableToTrade": ["5000", "5000"],
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["200", "200"],
+        },
+        filled_size="2.09",
+        fill_price="100",
+    )
 
     with (
         patch(
@@ -274,3 +306,73 @@ async def test_hyperliquid_market_order_reports_material_underfill_as_partial():
     assert result["status"] == "partial"
     assert result["order"]["fill"]["filled_notional_usd"] == 209.0
     assert result["order"]["fill"]["fill_ratio"] == pytest.approx(0.0209)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_market_order_rejects_notional_over_available_margin():
+    fake = _FakeExecutionAdapter(
+        active_asset_data={
+            "availableToTrade": ["1", "1"],
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["100", "100"],
+        }
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_market_order(
+            wallet_label="main",
+            asset_name="BTC-USDC",
+            is_buy=True,
+            usd_amount=10,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "insufficient_hyperliquid_margin"
+    details = out["error"]["details"]
+    assert details["available_to_trade_margin_usd"] == 1.0
+    assert details["available_margin_usd"] == 1.0
+    assert details["required_margin_usd"] == 2.0
+    assert details["max_order_notional_usd"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_reduce_only_rejects_size_above_live_position():
+    fake = _FakeExecutionAdapter(
+        user_state={
+            "assetPositions": [
+                {"position": {"coin": "BTC", "szi": "-0.25", "leverage": {}}}
+            ]
+        },
+        active_asset_data={
+            "availableToTrade": ["100", "100"],
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["100", "100"],
+        },
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_market_order(
+            wallet_label="main",
+            asset_name="BTC-USDC",
+            is_buy=True,
+            size=0.5,
+            reduce_only=True,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "reduce_only_size_exceeds_position"
+    assert out["error"]["details"]["closeable_size"] == 0.25

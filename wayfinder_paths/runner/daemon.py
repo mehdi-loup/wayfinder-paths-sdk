@@ -453,11 +453,15 @@ class RunnerDaemon:
         self._db.update_run_log_path(run_id=run_id, log_path=str(log_path))
 
         payload = job.get("payload") or {}
-        timeout_seconds = (
-            payload.get("timeout_seconds") or payload.get("timeout") or None
-        )
-        if timeout_seconds is None:
-            timeout_seconds = self._default_timeout_seconds
+        timeout_val = payload.get("timeout_seconds", payload.get("timeout"))
+        if timeout_val is None:
+            timeout_seconds: int | None = self._default_timeout_seconds
+        else:
+            try:
+                timeout_i = int(timeout_val)
+            except (TypeError, ValueError):
+                timeout_i = self._default_timeout_seconds
+            timeout_seconds = None if timeout_i <= 0 else int(timeout_i)
 
         env = os.environ.copy()
         env.update(
@@ -538,7 +542,7 @@ class RunnerDaemon:
             job_id=job_id,
             job_name=job_name,
             started_at=now,
-            timeout_seconds=int(timeout_seconds) if timeout_seconds else None,
+            timeout_seconds=timeout_seconds,
             popen=popen,
             log_path=log_path,
         )
@@ -787,6 +791,43 @@ class RunnerDaemon:
             return {"ok": True, "result": {"name": name, "status": JobStatus.ACTIVE}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
+
+    def ctl_stop_job(self, *, name: str, sig: str | None = None) -> dict[str, Any]:
+        if name is None:
+            return {"ok": False, "error": "name is required"}
+        name = str(name).strip()
+        if not name:
+            return {"ok": False, "error": "name is required"}
+
+        sig_name = str(sig or "TERM").strip().upper()
+        sig_val = signal.SIGTERM
+        if sig_name == "KILL":
+            sig_val = signal.SIGKILL
+        elif sig_name == "INT":
+            sig_val = signal.SIGINT
+        elif sig_name != "TERM":
+            return {"ok": False, "error": "sig must be one of: TERM, INT, KILL"}
+
+        try:
+            job, _ = self._db.get_job(name=name)
+        except KeyError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        killed: list[dict[str, Any]] = []
+        with self._lock:
+            for run_id, rp in list(self._running.items()):
+                if int(rp.job_id) != int(job.id):
+                    continue
+                _kill_process_group(rp.popen.pid, sig=sig_val)
+                killed.append({"run_id": int(run_id), "pid": int(rp.popen.pid)})
+
+        if not killed:
+            return {"ok": False, "error": "job is not currently running"}
+
+        return {
+            "ok": True,
+            "result": {"name": name, "signal": sig_name, "killed": killed},
+        }
 
     def ctl_run_once(self, *, name: str) -> dict[str, Any]:
         now = _utc_epoch_s()
