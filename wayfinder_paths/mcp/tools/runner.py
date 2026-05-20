@@ -17,6 +17,8 @@ from wayfinder_paths.runner.constants import JOB_TYPE_SCRIPT, JOB_TYPE_STRATEGY
 from wayfinder_paths.runner.lifecycle import ensure_daemon_started, try_status
 from wayfinder_paths.runner.paths import RunnerPaths, get_runner_paths
 
+RunnerReadAction = Literal["daemon_status", "status", "job_runs", "run_report"]
+
 
 def _default_sock_path() -> Path:
     paths = get_runner_paths(repo_root=repo_root())
@@ -499,3 +501,36 @@ async def core_runner(
             str(exc),
             details={"sock_path": str(client.sock_path)},
         )
+
+
+@catch_errors
+async def core_runner_status(
+    action: RunnerReadAction = "status",
+    *,
+    sock_path: str | None = None,
+    name: str | None = None,
+    limit: int | None = None,
+    run_id: int | None = None,
+    tail_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Inspect runner daemon/job state without mutating scheduler state.
+
+    Use this for routine checks that should not require user approval:
+      - `daemon_status`: lightweight socket/listener probe.
+      - `status`: daemon state + all jobs.
+      - `job_runs`: recent runs for a job (`name`, optional `limit`).
+      - `run_report`: detailed log for a single run (`run_id`, optional `tail_bytes`).
+
+    Mutating scheduler actions such as `add_job`, `delete_job`, `run_once`,
+    `daemon_start`, and `daemon_stop` remain on `core_runner` and should stay
+    approval-gated.
+    """
+
+    return await core_runner(
+        action=action,
+        sock_path=sock_path,
+        name=name,
+        limit=limit,
+        run_id=run_id,
+        tail_bytes=tail_bytes,
+    )

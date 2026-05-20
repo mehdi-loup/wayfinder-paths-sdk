@@ -84,7 +84,7 @@ from wayfinder_paths.mcp.tools.research_gateway import (
     research_web_search,
 )
 from wayfinder_paths.mcp.tools.run_script import core_run_script
-from wayfinder_paths.mcp.tools.runner import core_runner
+from wayfinder_paths.mcp.tools.runner import core_runner, core_runner_status
 from wayfinder_paths.mcp.tools.strategies import core_run_strategy
 from wayfinder_paths.mcp.tools.tokens import (
     onchain_fuzzy_search_tokens,
@@ -180,6 +180,7 @@ TOOL_REGISTRY: tuple[Callable[..., Any], ...] = (
     _tool(contracts_deploy, execution_tool),
     _tool(contracts_execute, execution_tool),
     _tool(core_run_strategy, execution_tool),
+    _tool(core_runner_status),
     _tool(core_runner, schedule_tool),
     # Research + Delta Lab + quant data access.
     _tool(research_web_search),

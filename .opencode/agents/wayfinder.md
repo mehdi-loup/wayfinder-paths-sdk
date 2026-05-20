@@ -19,6 +19,7 @@ permission:
   wayfinder_core_execute: ask
   wayfinder_core_run_script: ask
   wayfinder_core_run_strategy: ask
+  wayfinder_core_runner_status: allow
   wayfinder_core_runner: ask
   wayfinder_hyperliquid_place_*: ask
   wayfinder_hyperliquid_cancel_order: ask
@@ -130,20 +131,23 @@ Scheduled or recurring work must go through the runner daemon. Do not use cron, 
 Runner examples:
 
 ```text
-runner(action="ensure_started")
-runner(action="add_job", name="basis-update", type="strategy", strategy="basis_trading_strategy", strategy_action="update", interval_seconds=600, config="./config.json")
-runner(action="add_job", name="check-balances", type="script", script_path=".wayfinder_runs/check_balances.py", interval_seconds=300)
-runner(action="status")
-runner(action="run_once", name="<name>")
-runner(action="pause_job", name="<name>")
-runner(action="resume_job", name="<name>")
-runner(action="delete_job", name="<name>")
-runner(action="daemon_stop")
+wayfinder_core_runner_status(action="status")
+wayfinder_core_runner_status(action="job_runs", name="<name>")
+wayfinder_core_runner_status(action="run_report", run_id=<id>)
+wayfinder_core_runner(action="ensure_started")
+wayfinder_core_runner(action="add_job", name="basis-update", type="strategy", strategy="basis_trading_strategy", strategy_action="update", interval_seconds=600, config="./config.json")
+wayfinder_core_runner(action="add_job", name="check-balances", type="script", script_path=".wayfinder_runs/check_balances.py", interval_seconds=300)
+wayfinder_core_runner(action="run_once", name="<name>")
+wayfinder_core_runner(action="pause_job", name="<name>")
+wayfinder_core_runner(action="resume_job", name="<name>")
+wayfinder_core_runner(action="delete_job", name="<name>")
+wayfinder_core_runner(action="daemon_stop")
 ```
 
 Runner safety rules:
 
-- If `add_job`, `delete_job`, `update_job`, or `run_once` times out or returns an ambiguous transport error, treat mutation state as unknown. Call `runner(action="status")`, `runner(action="job_runs", name=...)`, or `runner(action="run_report", run_id=...)` before retrying, restarting, or telling the user what happened.
+- Use `wayfinder_core_runner_status(...)` for read-only inspection (`daemon_status`, `status`, `job_runs`, `run_report`); it should not require user approval. Use approval-gated `wayfinder_core_runner(...)` only for lifecycle or scheduling mutations.
+- If `add_job`, `delete_job`, `update_job`, or `run_once` times out or returns an ambiguous transport error, treat mutation state as unknown. Call `wayfinder_core_runner_status(action="status")`, `wayfinder_core_runner_status(action="job_runs", name=...)`, or `wayfinder_core_runner_status(action="run_report", run_id=...)` before retrying, restarting, or telling the user what happened.
 - Generated monitor scripts must store durable state with `wayfinder_paths.runner.monitor_state` (`monitor_state_path`, `read_monitor_state`, `write_monitor_state`). This writes JSON under `$WAYFINDER_RUNNER_DIR/job_state/$WAYFINDER_KV_NAMESPACE/`. Do not store monitor/checkpoint/alert state in `/tmp`; restart-pruned state can duplicate alerts.
 - First/seed runs must not send external alerts unless the user explicitly requested an immediate test notification.
 - Position-bound monitors must verify the live position still exists and matches expected side, size/notional, leverage, and margin mode before alerting.

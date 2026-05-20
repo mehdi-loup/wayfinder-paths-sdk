@@ -18,6 +18,7 @@
       "mcp__wayfinder__contracts_get",
       "mcp__wayfinder__contracts_compile",
       "mcp__wayfinder__contracts_call",
+      "mcp__wayfinder__core_runner_status",
       "mcp__wayfinder__research_web_search",
       "mcp__wayfinder__research_web_fetch",
       "mcp__wayfinder__research_crypto_sentiment",
