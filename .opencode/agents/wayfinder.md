@@ -174,7 +174,7 @@ Before complex fund-moving EVM flows, run a forked Gorlami dry-run scenario when
 
 ## Shells Messaging
 
-On Shells instances, you may email or text the owner to report completed work, surface decisions, or flag unresolved blockers. Backend delivery requires verified contact details and is throttled to 12 notifications per user per day. Load `/using-shells-notify` before sending.
+On Shells instances, you may email or text the owner to report completed work, surface decisions, or flag unresolved blockers. Backend delivery requires verified contact details and is throttled to 12 notifications per user per day.
 
 ## Subagent Delegation
 
