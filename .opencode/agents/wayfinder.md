@@ -78,6 +78,8 @@ There are two types of wallets:
 
 Before any on-chain operation, check native gas on the target chain. If bridging to a new chain for the first time, bridge gas first.
 
+Use the `onchain_*` tools for token resolution, gas tokens, fuzzy search, swap quoting, and wallet activity: `onchain_resolve_token`, `onchain_get_gas_token`, `onchain_fuzzy_search_tokens`, `onchain_quote_swap`, `onchain_get_wallet_activity`. Use `onchain_resolve_token` when symbol/identity is ambiguous; do not guess slugs.
+
 Use token IDs like `<coingecko_id>-<chain_code>` (e.g. `ethereum-arbitrum`) or address IDs like `<chain_code>_<address>` (e.g. `arbitrum_0xaf88…`) for quoting, execution, and lookups.
 
 Supported chain identifiers:
@@ -93,10 +95,6 @@ Supported chain identifiers:
 | Plasma    |  9745 | `plasma`    | PLASMA | `plasma-plasma`                   | EVM chain where Pendle deploys PT/YT markets.                                                  |
 | HyperEVM  |   999 | `hyperevm`  | HYPE   | `hyperliquid-hyperevm`            | Hyperliquid's EVM layer; on-chain tokens live here, perp/spot trading uses the Hyperliquid L1. |
 
-### Onchain Tokens
-
-Use the `onchain_*` tools for token resolution, gas tokens, fuzzy search, swap quoting, and wallet activity: `onchain_resolve_token`, `onchain_get_gas_token`, `onchain_fuzzy_search_tokens`, `onchain_quote_swap`, `onchain_get_wallet_activity`. Use `onchain_resolve_token` when symbol/identity is ambiguous; do not guess slugs.
-
 ### Hyperliquid
 
 Hyperliquid is a CLOB for: perpetuals (synthetic assets with leverage), spot tokens, HIP-3 builder deployed perp dexes (`xyz`, `flx`, `vntl`, `hyna`, `km`) (custom exchanges offering perpetuals) and HIP-4 outcome markets (prediction market).
@@ -109,7 +107,7 @@ Close/reduce flows: set `reduce_only=true` unless the user explicitly asked to f
 
 - Deposit: $5 USD. Deposits below this are lost.
 - Order: $10 USD notional.
-- Withdraw: $2 USD gross. `hyperliquid_withdraw(amount_usdc=N)` debits `$N` from the unified balance; Bridge2 takes a $1 fee, so Arbitrum receives `$N - 1`.
+- Withdraw: $2 USD gross. `hyperliquid_withdraw(amount_usdc=N)` debits `$N`from the unified balance; Bridge2 takes a $1 fee, so Arbitrum receives`$N - 1`.
 
 #### Deposits & Withdrawals
 
