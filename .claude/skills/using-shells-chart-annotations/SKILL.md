@@ -125,7 +125,17 @@ order book, trades, and trade ticket while keeping the workspace chart active:
 
 Supported transforms: `filter`, `latest_by`, `top_n`, `rebase`, `pct_change`, `scale`, `multiply`, `ratio`, `spread`, `moving_average`. Prefer `rebase(base=100)` for relative performance across different units.
 
-Transforms can live on the chart or on a single series. Use series-level transforms when only one dataset needs conversion, for example annualizing hourly funding:
+Transforms can live on the chart or on a single series. Copy any `default_transforms` from a search result into the series `transforms`, then add metric conversions. Use series-level transforms when only one dataset needs conversion.
+
+Delta Lab APY/rate fields are decimal fractions. `0.12` means `12%`, not `0.12%`.
+
+For Pendle/lending/Boros/yield APY or APR fields such as `implied_apy`, `underlying_apy`, `supply_apr`, `borrow_apr`, `fixed_rate_mark`, and `floating_rate_oracle`, convert to display percent:
+
+```json
+{"type": "scale", "factor": 100, "unit": "%", "label_suffix": "(%)"}
+```
+
+For annualizing hourly funding to display percent:
 
 ```json
 {
@@ -134,9 +144,9 @@ Transforms can live on the chart or on a single series. Use series-level transfo
   "source": {"type": "dataset_series", "dataset_id": "hyperliquid.perp.funding", "params": {"coin": "BTC"}},
   "x": "ts",
   "y": "funding_rate",
-  "unit": "apy",
+  "unit": "%",
   "axis": "right",
-  "transforms": [{"type": "scale", "factor": 8760, "unit": "apy"}]
+  "transforms": [{"type": "scale", "factor": 876000, "unit": "%", "label_suffix": "(annualized %)"}]
 }
 ```
 

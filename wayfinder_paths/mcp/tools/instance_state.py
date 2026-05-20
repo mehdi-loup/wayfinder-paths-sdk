@@ -10,6 +10,20 @@ from wayfinder_paths.core.config import is_opencode_instance
 from wayfinder_paths.mcp.utils import catch_errors, err, ok
 
 _NOT_OPENCODE_ERR = ("not_opencode_instance", "Not running on an OpenCode instance")
+_RATE_PERCENT_FIELDS = {
+    "implied_apy",
+    "underlying_apy",
+    "supply_apr",
+    "borrow_apr",
+    "net_supply_apy",
+    "net_borrow_apy",
+    "fixed_rate_mark",
+    "floating_rate_oracle",
+    "apy",
+    "apy_base",
+    "apy_base_7d",
+    "reward_apr",
+}
 
 
 def _http_error_message(exc: httpx.HTTPStatusError) -> tuple[str, Any | None]:
@@ -26,6 +40,58 @@ def _http_error_message(exc: httpx.HTTPStatusError) -> tuple[str, Any | None]:
     else:
         message = str(details or response.reason_phrase)
     return f"HTTP {response.status_code}: {message}", details
+
+
+def _normalizes_scale(transforms: list[Any]) -> bool:
+    return any(
+        isinstance(t, dict)
+        and str(t.get("type") or "").strip().lower() in {"scale", "multiply"}
+        for t in transforms
+    )
+
+
+def _normalize_chart_series_for_display(
+    series: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Add safe display transforms for common Delta Lab decimal rate fields.
+
+    Agents still should provide explicit transforms, but this prevents raw
+    decimal APYs such as 0.12 from being rendered or summarized as 0.12%.
+    """
+
+    normalized: list[dict[str, Any]] = []
+    for item in series:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        y_field = str(item.get("y") or "").strip()
+        transforms = (
+            item.get("transforms") if isinstance(item.get("transforms"), list) else []
+        )
+        if y_field == "funding_rate" and not _normalizes_scale(transforms):
+            transforms = [
+                *transforms,
+                {
+                    "type": "scale",
+                    "factor": 876000,
+                    "unit": "%",
+                    "label_suffix": "(annualized %)",
+                },
+            ]
+            item = {**item, "unit": "%", "transforms": transforms}
+        elif y_field in _RATE_PERCENT_FIELDS and not _normalizes_scale(transforms):
+            transforms = [
+                *transforms,
+                {
+                    "type": "scale",
+                    "factor": 100,
+                    "unit": "%",
+                    "label_suffix": "(%)",
+                },
+            ]
+            item = {**item, "unit": "%", "transforms": transforms}
+        normalized.append(item)
+    return normalized
 
 
 @catch_errors
@@ -89,11 +155,13 @@ async def shells_set_active_market(
 ) -> dict[str, Any]:
     """Switch the default Shells chart and trading context to one market.
 
-    Use this for requests like "show AAVE", "switch to PENGU perp", or
-    "open this Polymarket market". This updates the live chart, order book,
-    trades, and trade ticket together. Prefer this over `shells_create_chart`
-    when the user wants a single tradable token, perp, spot, or prediction
-    market rather than a custom visual pane.
+    Use this for requests like "show AAVE", "switch to PENGU perp", "chart
+    PROMPT", or "open this Polymarket market". This updates the live chart,
+    order book, trades, and trade ticket together. Prefer this over
+    `shells_create_chart` when the user wants a single tradable token, perp,
+    spot, or prediction market rather than a custom visual pane. For onchain
+    swap-token charts, pass market_type="onchain-spot" instead of searching
+    chart-series candidates.
 
     Args:
       query: Natural search text, e.g. "AAVE perp" or "Timberwolves".
@@ -165,9 +233,14 @@ async def shells_create_chart(
       filter, latest_by, top_n, rebase, pct_change, scale, multiply, ratio,
       spread, moving_average. Prefer rebase(base=100) for relative performance.
       Put transforms on a single series when only that data needs conversion,
-      e.g. annualize hourly funding with
-      {"type": "scale", "factor": 8760, "unit": "apy"}. Use chart-level
-      transforms only when all series should be transformed together.
+      and copy a registry item's `default_transforms` into the series-level
+      transforms before adding metric conversions. Delta Lab APY/rate fields are
+      decimal fractions, so `0.12` should be displayed as `12%` with
+      {"type": "scale", "factor": 100, "unit": "%", "label_suffix": "(%)"}.
+      Annualize hourly funding directly to percent with {"type": "scale",
+      "factor": 876000, "unit": "%", "label_suffix": "(annualized %)"}.
+      Use chart-level transforms only when all series should be transformed
+      together.
 
     Series can include optional `axis` ("left" or "right") and `color`.
     Keep comparable units on the same axis; use a right axis for unrelated
@@ -186,7 +259,7 @@ async def shells_create_chart(
         "id": chart_id,
         "title": title,
         "kind": kind,
-        "series": series,
+        "series": _normalize_chart_series_for_display(series),
         "transforms": transforms or [],
         "overlays": overlays or [],
     }

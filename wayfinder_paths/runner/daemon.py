@@ -29,6 +29,8 @@ from wayfinder_paths.runner.db import RunnerDB
 from wayfinder_paths.runner.paths import RunnerPaths
 from wayfinder_paths.runner.script_resolver import resolve_script_path
 
+JOB_RESULT_MARKER = "WAYFINDER_JOB_RESULT "
+
 
 def _utc_epoch_s() -> int:
     return int(time.time())
@@ -53,6 +55,42 @@ def _tail_text(path: Path, *, max_bytes: int = 4000) -> str | None:
     if not text:
         return None
     return text[-max_bytes:]
+
+
+def _extract_job_result_event(
+    path: Path, *, max_bytes: int = 64_000
+) -> dict[str, Any] | None:
+    text = _tail_text(path, max_bytes=max_bytes)
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith(JOB_RESULT_MARKER):
+            continue
+        raw = stripped[len(JOB_RESULT_MARKER) :].strip()
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            return {
+                "summary": raw[:1000],
+                "severity": "info",
+                "parseError": True,
+            }
+        if isinstance(event, dict):
+            return event
+        return {
+            "summary": str(event)[:1000],
+            "severity": "info",
+        }
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _kill_process_group(pid: int, *, sig: int) -> None:
@@ -353,17 +391,28 @@ class RunnerDaemon:
 
         if session_id is None or not OPENCODE_CLIENT.healthy():
             return
-
-        notification = json.dumps(
-            {
-                "type": "job_result",
-                "name": running_process.job_name,
-                "status": status,
-                "error": error_text,
-                "message": running_process.log_path.read_text(errors="replace").strip()
-                or "(no output)",
-            }
+        event = _extract_job_result_event(running_process.log_path)
+        should_post_success = _truthy(job.payload.get("notify_session_on_success")) or (
+            event is not None
         )
+        if status == RunStatus.OK and not should_post_success:
+            return
+        message = _tail_text(running_process.log_path, max_bytes=4000) or "(no output)"
+        if event is not None:
+            message = str(
+                event.get("message") or event.get("summary") or "Scheduled job event"
+            )
+
+        payload: dict[str, Any] = {
+            "type": "job_result",
+            "name": running_process.job_name,
+            "status": status,
+            "error": error_text,
+            "message": message,
+        }
+        if event is not None:
+            payload["event"] = event
+        notification = json.dumps(payload)
         OPENCODE_CLIENT.send_message(session_id, notification)
 
     def _shutdown_running_processes(self) -> None:

@@ -82,13 +82,17 @@ async def core_runner(
     script_path: str | None = None,
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
+    notify_session_on_success: bool = False,
     debug: bool = False,
 ) -> dict[str, Any]:
     """Control the local runner daemon — the only sanctioned scheduler for recurring jobs.
 
     All scheduled/recurring tasks MUST go through this tool. Don't use cron, systemd timers,
     or background loops. The daemon owns persistence, failure tracking, timeouts, and (on
-    Wayfinder Shells) backend job/run sync.
+    Wayfinder Shells) backend job/run sync. Routine successful scheduled runs sync to the
+    backend but do not post chat `job_result` messages unless `notify_session_on_success`
+    is explicitly true or the script emits a `WAYFINDER_JOB_RESULT {...}` marker; failures
+    still post to the session.
 
     Lifecycle actions:
       - `daemon_status`: lightweight probe — has the socket, is anyone listening.
@@ -111,8 +115,24 @@ async def core_runner(
       - `job_runs`: recent runs for a job (`name`, optional `limit`).
       - `run_report`: detailed log for a single run (`run_id`, optional `tail_bytes`).
 
+    Safety notes for monitors and mutations:
+      - If `add_job`, `delete_job`, `update_job`, or `run_once` times out at the
+        caller, treat the mutation result as unknown and inspect `status`,
+        `job_runs`, or `run_report` before retrying.
+      - Generated monitor scripts should keep durable state under the runner
+        directory or `.wayfinder_runs/state`, not `/tmp`.
+      - First/seed runs should not send external alerts unless explicitly
+        requested. Position-bound monitors should verify live side, size,
+        leverage/mode, and notional before alerting.
+      - Fetch or notify failures should exit nonzero or emit a
+        `WAYFINDER_JOB_RESULT` handoff rather than looking like a healthy run.
+
     Args:
         sock_path: Override the daemon socket (default: standard runner location).
+        notify_session_on_success: Post successful runs into chat. Defaults false to keep
+            routine scheduled checks quiet; use script-level `shells_notify`/`NotifyClient`
+            for owner alerts or print `WAYFINDER_JOB_RESULT {"summary": "...",
+            "instructions": "..."}` for conditional chat callbacks.
         debug: Verbose response payload for troubleshooting.
     """
 
@@ -341,6 +361,8 @@ async def core_runner(
                     if not isinstance(env, dict):
                         return err("invalid_request", "env must be an object")
                     job_payload["env"] = {str(k): str(v) for k, v in env.items()}
+                if notify_session_on_success:
+                    job_payload["notify_session_on_success"] = True
 
                 if job_type == JOB_TYPE_STRATEGY:
                     strat = (strategy or "").strip()

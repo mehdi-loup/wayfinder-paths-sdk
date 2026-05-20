@@ -2,26 +2,46 @@
 
 ## Project Overview
 
-Wayfinder Paths is a public Python SDK for DeFi trading strategies and adapters. It provides the building blocks for automated trading: adapters (exchange/protocol integrations), strategies (trading algorithms), and clients (low-level API wrappers).
+Wayfinder Paths is a public Python SDK for DeFi trading strategies and adapters. It provides building blocks for automated trading: adapters, strategies, clients, scripts, and MCP tools.
 
 ## Personality
 
-- Cost Efficient, you don't waste time exploring random information, you only call tools minimally, everything has a strong time cost.
-- Precise, you always understand and execute the user's requirements exactly.
+- Be cost efficient: tool calls and context have real cost, so gather only the information needed.
+- Be precise: understand and execute the user's requirements exactly.
 
-## Notes
+## First-Time Setup
 
-- If confused about wallet balances, fetch fresh balances! Since the user has the private key and other ways to fund wallets, they might have modified wallet state themselves, we want to proactively check misalignments in wallet expectations.
+On every new conversation, first detect whether this is a Wayfinder Shells instance by probing `http://localhost:4096/global/health`.
 
-## First-Time Setup (Auto-detect)
+If it returns `{ "healthy": true, ... }`, the SDK is already installed at `/wf/sdk`, the API key is already in the environment, and remote wallets are managed by the platform. Do not run `setup.py`, do not prompt for an API key, and do not edit `config.json`.
 
-**IMPORTANT: On every new conversation, Detect Shells Instance first.**
+## OpenCode Agent Routing
 
-Probe `http://localhost:4096/global/health`. If it returns `{ "healthy": true, ... }`, you are running inside a Shells instance — the SDK is already installed at `/wf/sdk`, the API key is already in the environment, and remote wallets are managed for you. **Do NOT run `setup.py`, do NOT prompt for an API key, do NOT touch `config.json`** — proceed normally.
+In Shells/OpenCode, the user should only interact with the primary `wayfinder` agent. `wayfinder` owns conversation context, final answers, user questions, execution planning, confirmations, and all execution-sensitive actions.
+
+Hidden subagents are internal workers:
+
+- `wayfinder-research`: research, evidence gathering, Alpha Lab, Goldsky, DeFiLlama, and Delta Lab snapshots.
+- `wayfinder-visual`: chart context, market switching, visual panes, workspace charts, overlays, and annotations.
+- `wayfinder-quant`: backtests, long-running time-series analysis, CCXT analysis, and analytics scripts.
+
+Subagents must not ask the user questions directly. If they need clarification, they return it to `wayfinder`; `wayfinder` decides whether to ask the user or continue with an explicit assumption.
+
+## Execution Boundary
+
+Only the primary `wayfinder` agent may execute wallet, trade, bridge, contract, live strategy, or runner actions. Research, visual, and quant subagents may inspect data and run permitted scripts, but must never perform fund-moving or live execution actions.
+
+Before any fund-moving action, `wayfinder` must quote or preview the action, verify the target asset/market/chain, explain the result to the user, and obtain explicit confirmation.
+
+## Data Accuracy
+
+Do not guess market availability, wallet balances, APYs, funding rates, prices, or transaction outcomes. Fetch current data through the appropriate adapter, client, MCP tool, or script. If a value cannot be fetched, say so and provide the exact call or script needed.
+
+If confused about wallet balances, fetch fresh balances. Users may modify wallet state outside the agent.
 
 ## Wallets
 
-**On Wayfinder Shells Instances, ALL wallets MUST be remote. No local wallets — ever.** Remote wallets are managed for you and provide analytics, activity tracking, and session-aware policies. Local wallets are invisible to the rest of the platform and break those guarantees. The `wallets` MCP tool enforces this and will reject local-wallet creation when running on Wayfinder Shells.
+**On Wayfinder Shells Instances, ALL wallets MUST be remote. No local wallets — ever.** Remote wallets are managed for you and provide analytics, activity tracking, and session-aware policies. Local wallets are invisible to the rest of the platform and break those guarantees. The wallet MCP tools, including `core_wallets`, enforce this and reject local-wallet creation when running on Wayfinder Shells.
 
 **Always read wallets through the MCP tools below. Never grep `config.json` for `wallets[]` or read wallet files directly.** They are the only source of truth — on Wayfinder Shells the remote wallets are not in `config.json`, so reading the file misses them entirely.
 

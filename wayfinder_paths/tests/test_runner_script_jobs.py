@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from wayfinder_paths.runner.daemon import RunnerDaemon
+from wayfinder_paths.core.clients.OpenCodeClient import OPENCODE_CLIENT
+from wayfinder_paths.runner.constants import JOB_TYPE_SCRIPT, RunStatus
+from wayfinder_paths.runner.daemon import RunnerDaemon, RunningProcess
 from wayfinder_paths.runner.db import RunnerDB
 from wayfinder_paths.runner.paths import RunnerPaths
 from wayfinder_paths.runner.script_resolver import resolve_script_path
@@ -85,3 +87,145 @@ def test_daemon_adds_script_job_with_relative_path(tmp_path: Path) -> None:
     stored = str(job["payload"]["script_path"])
     assert stored.endswith("hello.py")
     assert not Path(stored).is_absolute()
+
+
+def test_notify_session_skips_routine_success(tmp_path: Path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    log = p.logs_dir / "job.log"
+    p.logs_dir.mkdir(parents=True, exist_ok=True)
+    log.write_text("ok\n", encoding="utf-8")
+
+    daemon = RunnerDaemon(paths=p)
+    daemon._db.add_job(
+        name="quiet-job",
+        job_type=JOB_TYPE_SCRIPT,
+        payload={
+            "script_path": ".wayfinder_runs/hello.py",
+            "notify_session_id": "ses_1",
+        },
+        interval_seconds=60,
+    )
+    job, _ = daemon._db.get_job(name="quiet-job")
+    calls: list[str] = []
+    monkeypatch.setattr(OPENCODE_CLIENT, "healthy", lambda: True)
+    monkeypatch.setattr(
+        OPENCODE_CLIENT,
+        "send_message",
+        lambda _session_id, message: calls.append(message),
+    )
+
+    daemon._notify_session(
+        RunningProcess(
+            run_id=1,
+            job_id=job.id,
+            job_name="quiet-job",
+            started_at=0,
+            timeout_seconds=None,
+            popen=object(),  # type: ignore[arg-type]
+            log_path=log,
+        ),
+        status=RunStatus.OK,
+        error_text=None,
+    )
+
+    assert calls == []
+
+
+def test_notify_session_posts_failures(tmp_path: Path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    log = p.logs_dir / "job.log"
+    p.logs_dir.mkdir(parents=True, exist_ok=True)
+    log.write_text("bad\n", encoding="utf-8")
+
+    daemon = RunnerDaemon(paths=p)
+    daemon._db.add_job(
+        name="loud-job",
+        job_type=JOB_TYPE_SCRIPT,
+        payload={
+            "script_path": ".wayfinder_runs/hello.py",
+            "notify_session_id": "ses_1",
+        },
+        interval_seconds=60,
+    )
+    job, _ = daemon._db.get_job(name="loud-job")
+    calls: list[str] = []
+    monkeypatch.setattr(OPENCODE_CLIENT, "healthy", lambda: True)
+    monkeypatch.setattr(
+        OPENCODE_CLIENT,
+        "send_message",
+        lambda _session_id, message: calls.append(message),
+    )
+
+    daemon._notify_session(
+        RunningProcess(
+            run_id=1,
+            job_id=job.id,
+            job_name="loud-job",
+            started_at=0,
+            timeout_seconds=None,
+            popen=object(),  # type: ignore[arg-type]
+            log_path=log,
+        ),
+        status=RunStatus.FAILED,
+        error_text="failed",
+    )
+
+    assert len(calls) == 1
+    assert '"type": "job_result"' in calls[0]
+    assert '"status": "FAILED"' in calls[0]
+
+
+def test_notify_session_posts_success_with_job_result_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    p = _paths(tmp_path)
+    log = p.logs_dir / "job.log"
+    p.logs_dir.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "\n".join(
+            [
+                "routine check ok",
+                'WAYFINDER_JOB_RESULT {"summary":"Funding crossover detected","instructions":"Research whether to unroll the position.","severity":"warning"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    daemon = RunnerDaemon(paths=p)
+    daemon._db.add_job(
+        name="event-job",
+        job_type=JOB_TYPE_SCRIPT,
+        payload={
+            "script_path": ".wayfinder_runs/hello.py",
+            "notify_session_id": "ses_1",
+        },
+        interval_seconds=60,
+    )
+    job, _ = daemon._db.get_job(name="event-job")
+    calls: list[str] = []
+    monkeypatch.setattr(OPENCODE_CLIENT, "healthy", lambda: True)
+    monkeypatch.setattr(
+        OPENCODE_CLIENT,
+        "send_message",
+        lambda _session_id, message: calls.append(message),
+    )
+
+    daemon._notify_session(
+        RunningProcess(
+            run_id=1,
+            job_id=job.id,
+            job_name="event-job",
+            started_at=0,
+            timeout_seconds=None,
+            popen=object(),  # type: ignore[arg-type]
+            log_path=log,
+        ),
+        status=RunStatus.OK,
+        error_text=None,
+    )
+
+    assert len(calls) == 1
+    assert '"type": "job_result"' in calls[0]
+    assert '"status": "OK"' in calls[0]
+    assert '"message": "Funding crossover detected"' in calls[0]
+    assert "Research whether to unroll the position." in calls[0]
