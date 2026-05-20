@@ -174,8 +174,6 @@ Hyperliquid minimums:
 - Minimum order: $10 USD notional for perp and spot.
 - Minimum withdraw: $2 USD gross. `hyperliquid_withdraw(amount_usdc=N)` debits `$N` from the unified balance; Bridge2 takes a $1 fee out of that, so Arbitrum receives `$N - 1`.
 
-Hyperliquid deposit visibility (gotcha): in UnifiedAccount mode, deposits land in the unified balance and surface via `spotClearinghouseState` as the `USDC` coin. Perp `marginSummary.accountValue` stays `0` — that is expected, not a failed deposit.
-
 Hyperliquid surfaces include perp, spot, HIP-3 builder-deployed perp dexes such as `xyz`, `flx`, `vntl`, `hyna`, and `km`, and HIP-4 outcome markets. HIP-4 outcomes use asset IDs `100_000_000 + 10*outcome_id + side`, integer contract sizes, settle in USDH token `360`, and settle daily at 06:00 UTC. They route through the same `hyperliquid_place_market_order` / `hyperliquid_place_limit_order` tools — pass `asset_name="#<encoding>"` and the tool dispatches the outcome path (no builder fee, integer contracts). Use per-action tools after confirmation: `hyperliquid_place_market_order`, `hyperliquid_place_limit_order`, `hyperliquid_place_trigger_order`, `hyperliquid_cancel_order`, `hyperliquid_update_leverage`, `hyperliquid_deposit`, and `hyperliquid_withdraw`.
 
 Polymarket writes also use per-action tools after confirmation: `polymarket_deposit`, `polymarket_withdraw`, `polymarket_place_market_order`, `polymarket_place_limit_order`, `polymarket_cancel_order`, and `polymarket_redeem_positions`.
