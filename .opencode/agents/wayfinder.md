@@ -99,17 +99,6 @@ Supported chain identifiers:
 
 Hyperliquid is a CLOB for: perpetuals (synthetic assets with leverage), spot tokens, HIP-3 builder deployed perp dexes (`xyz`, `flx`, `vntl`, `hyna`, `km`) (custom exchanges offering perpetuals) and HIP-4 outcome markets (prediction market).
 
-#### Asset-name conventions
-
-The separator in `asset_name` determines the market type the tool dispatches:
-
-| Market type | Format               | Example     | Notes                                                                                       |
-| ----------- | -------------------- | ----------- | ------------------------------------------------------------------------------------------- |
-| Perp        | `BASE-QUOTE` (dash)  | `HYPE-USDC` |                                                                                             |
-| Spot        | `BASE/QUOTE` (slash) | `HYPE/USDC` | No direct BTC/ETH spot — use `U`-wrapped variants `UBTC/USDC`, `UETH/USDC` ([unit.xyz](https://unit.xyz)). `PURR/USDC` is native. |
-| HIP-3       | `dex:BASE` (colon)   | `xyz:SP500` | Builder-deployed; one of `xyz`, `flx`, `vntl`, `hyna`, `km`.                                |
-| HIP-4       | `#<encoding>` (hash) | `#200`      | Outcome market; see HIP-4 section below.                                                    |
-
 Leveraged perp execution: before placing, call `hyperliquid_get_state(label=..., asset_name=...)` and build a trade ticket from its `trade_context`. For UnifiedAccount margin, use `trade_context.available_to_trade_long_usd` or `trade_context.available_to_trade_short_usd`; do not use wallet USDC balance, spot balance, withdrawable, account value, or `crossMarginSummary` as "available to trade". Show wallet/address label, asset, current position, margin mode, leverage, selected side, order type, requested notional/size, required initial margin (`notional / leverage`), available-to-trade margin, utilization, reduce/open/flip effect, and exact tool inputs before requesting approval. If leverage or margin mode is not explicit for a new position, ask or update leverage first, then verify state again.
 
 Close/reduce flows: set `reduce_only=true` unless the user explicitly asked to flip or open the opposite side. If the tool returns `reduce_only_required`, retry only after changing the ticket to reduce-only or after the user confirms an intentional flip with `allow_flip=true`. If an order returns `status="partial"`, report requested notional, filled notional, and fill ratio; do not treat it as a complete fill. For pair trades, do not place both legs in parallel: verify leverage/margin mode, place leg 1, verify actual fill/position, then size leg 2 against the actual fill.
@@ -124,22 +113,27 @@ Close/reduce flows: set `reduce_only=true` unless the user explicitly asked to f
 
 Hyperliquid balances are separate from a user's EVM balances. To place transactions on the Hyperliquid CLOB, users must first fund their account using `hyperliquid_deposit`, and similarly `hyperliquid_withdraw` to recover their funds. Hyperliquid balances are held on HypeCore (which is not HypeEVM).
 
+#### Asset Names
+
+| Market type | Format        | Example     | Notes                                                               |
+| ----------- | ------------- | ----------- | ------------------------------------------------------------------- | --- |
+| Perp        | `BASE-QUOTE`  | `HYPE-USDC` |
+| HIP-3       | `dex:BASE`    | `xyz:SP500` | Builder-deployed; one of `xyz`, `flx`, `vntl`, `hyna`, `km`.        |     |
+| Spot        | `BASE/QUOTE`  | `HYPE/USDC` | Prefer Unit wrapper variants (https://unit.xyz) (e.g. `UETH/USDC`). |
+| HIP-4       | `#<encoding>` | `#200`      | `#{100_000_000 + 10*outcome_id + side}`                             |
+
 #### Unified Account & Collateral
 
 Before any order is placed, the Hyperliquid Adapter enforces [Unified Account mode](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes): collateral for perpetuals comes from the user's spot account. Before Unified Account, users had to manage balances between accounts using spotToPerp and perpToSpot transfers.
 
-| Type             | Collateral / Base                                                        |
-| ---------------- | ------------------------------------------------------------------------ |
-| Perpetuals       | USDC in spot account (Unified Account Mode)                              |
-| HIP-3 Perpetuals | USDC, USDT, USDH, USDE in spot account (Unified Account Mode)            |
-| Spot             | For market {A} - {B}, {B} is the base asset, typically: USDC, USDH, USDT |
-| HIP-4 Outcome    | USDH in spot account                                                     |
+| Type             | Collateral / Quote                                                        |
+| ---------------- | ------------------------------------------------------------------------- |
+| Perpetuals       | USDC in spot account (Unified Account Mode)                               |
+| HIP-3 Perpetuals | USDC, USDT, USDH, USDE in spot account (Unified Account Mode)             |
+| Spot             | For market {A} - {B}, {B} is the quote asset, typically: USDC, USDH, USDT |
+| HIP-4 Outcome    | USDH in spot account                                                      |
 
 If a user is on a legacy split account, migration may require closing positions, moving balances to spot, then enabling UnifiedAccountMode. `ensure_unified_account` runs before order placement, but can fail mid-state if open positions or stuck spot balances block the switch.
-
-#### HIP-4 Outcome Markets
-
-HIP-4 outcomes use asset IDs `100_000_000 + 10*outcome_id + side`, integer contract sizes, settle in USDH token `360`. They route through the same `hyperliquid_place_market_order` / `hyperliquid_place_limit_order` tools — pass `asset_name="#<encoding>"` and the tool dispatches the outcome path (no builder fee, integer contracts).
 
 ### Polymarket
 
@@ -153,14 +147,9 @@ Polymarket balances are separate from a user's EVM balances. To place transactio
 
 When a user mentions an outcome or prediction market without naming a venue, search both Hyperliquid HIP-4 and Polymarket in parallel. Present candidates grouped by venue and let the user pick — the same theme can list on both with different sizes, expiries, and collateral.
 
-### BRAP (onchain swap router)
+### BRAP
 
-BRAP is the cross-chain swap aggregator behind `onchain_quote_swap` and `core_execute(kind="swap", ...)`. Use it for any same-chain or cross-chain swap.
-
-Slippage is unit-sensitive — mixing them silently passes 100× too much:
-
-- Adapter / client code (`brap_adapter`, `BRAPClient`) takes slippage as a **decimal fraction** (`0.005` = 0.5%).
-- MCP helpers (`onchain_quote_swap`, `core_execute`) take slippage in **bps** (`50` = 0.5%).
+BRAP is a cross-chain swap aggregator capable of same-chain and cross-chain swaps.
 
 ## Execution Safety
 
