@@ -14,13 +14,13 @@ to scope a persona's surface.
 
 Namespaces:
   - shells       instance ↔ frontend bridge (chart workspace, annotations, notify, ui ctx)
-  - research     alpha-lab, delta-lab, backend-mediated web search/fetch
+  - research     alpha-lab, delta-lab, DeFiLlama, Goldsky, social/sentiment
   - hyperliquid  HL perp/spot/HIP-3/HIP-4 reads + writes
   - onchain      token resolution, swaps, sends, wallet activity
   - polymarket   prediction markets reads + writes
   - contracts    contract compile/deploy/call/abi
   - core         cross-persona tools every subagent should allowlist
-                 (discovery, wallet reads, run_script, runner)
+                 (discovery, wallet reads, web search/fetch, run_script, runner)
 """
 
 from __future__ import annotations
@@ -74,6 +74,7 @@ from wayfinder_paths.mcp.tools.hyperliquid import (
     hyperliquid_cancel_order,
     hyperliquid_deposit,
     hyperliquid_get_state,
+    hyperliquid_get_trade_asset,
     hyperliquid_place_limit_order,
     hyperliquid_place_market_order,
     hyperliquid_place_trigger_order,
@@ -112,7 +113,7 @@ from wayfinder_paths.mcp.tools.research_gateway import (
     research_social_x_search,
 )
 from wayfinder_paths.mcp.tools.run_script import core_run_script
-from wayfinder_paths.mcp.tools.runner import core_runner
+from wayfinder_paths.mcp.tools.runner import core_runner, core_runner_status
 from wayfinder_paths.mcp.tools.strategies import core_run_strategy
 from wayfinder_paths.mcp.tools.tokens import (
     onchain_fuzzy_search_tokens,
@@ -152,11 +153,13 @@ def build_mcp(
     mcp.tool()(core_web_fetch)
     mcp.tool()(core_run_script)
     mcp.tool()(core_run_strategy)
+    mcp.tool()(core_runner_status)
     mcp.tool()(core_runner)
 
     # ─── hyperliquid_* ─────────────────────────────────────────────────
     # Coin naming reference: /using-hyperliquid-adapter/rules/coin-naming.md.
     mcp.tool()(hyperliquid_get_state)
+    mcp.tool()(hyperliquid_get_trade_asset)
     mcp.tool()(hyperliquid_search_market)
     mcp.tool()(hyperliquid_search_mid_prices)
     mcp.tool()(hyperliquid_place_market_order)
