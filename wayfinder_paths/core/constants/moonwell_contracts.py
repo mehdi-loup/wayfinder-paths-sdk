@@ -498,7 +498,7 @@ MOONWELL_CORE_MARKETS_BY_CHAIN: dict[int, dict[str, dict[str, Any]]] = {
 }
 
 MOONWELL_CORE_MARKETS_BY_MTOKEN: dict[int, dict[str, dict[str, Any]]] = {
-    chain_id: {str(market["mtoken"]).lower(): market for market in markets.values()}
+    chain_id: {str(market["mtoken"]): market for market in markets.values()}
     for chain_id, markets in MOONWELL_CORE_MARKETS_BY_CHAIN.items()
 }
 

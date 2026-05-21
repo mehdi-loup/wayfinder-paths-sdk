@@ -142,7 +142,7 @@ class MoonwellAdapter(BaseAdapter):
     ) -> dict[str, Any] | None:
         return (
             MOONWELL_CORE_MARKETS_BY_MTOKEN.get(self._chain_id(chain_id)) or {}
-        ).get(to_checksum_address(str(mtoken)).lower())
+        ).get(to_checksum_address(str(mtoken)))
 
     def _reward_distributor(self, chain_id: int | None = None) -> str | None:
         value = self._chain_entry(chain_id).get("reward_distributor")
