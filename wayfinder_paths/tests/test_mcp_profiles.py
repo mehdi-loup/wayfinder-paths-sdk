@@ -58,14 +58,13 @@ def test_mcp_catalog_exposes_expected_non_shell_tools() -> None:
 
     assert "core_execute" in names
     assert "core_run_script" in names
-    assert "core_runner_status" in names
     assert "core_runner" in names
     assert "core_web_search" in names
-    assert "core_web_fetch" in names
     assert "research_get_top_apy" in names
     assert "research_search_delta_lab_markets" in names
     assert "research_search_delta_lab_instruments" in names
     assert "research_get_delta_lab_pendle_market" in names
+    assert "hyperliquid_get_trade_asset" in names
     assert "hyperliquid_place_market_order" in names
     assert "hyperliquid_deposit" in names
     assert "polymarket_place_market_order" in names
@@ -100,7 +99,6 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert "wayfinder_research_*" not in primary
     assert primary["wayfinder_core_run_script"] == "ask"
     assert primary["wayfinder_core_execute"] == "ask"
-    assert primary["wayfinder_core_runner_status"] == "allow"
     assert primary["wayfinder_contracts_execute"] == "ask"
     _assert_rule_order(primary, "wayfinder_*", "wayfinder_core_*")
     _assert_rule_order(primary, "wayfinder_core_*", "wayfinder_core_run_script")
@@ -138,17 +136,6 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
 
 
-def test_opencode_agents_allow_user_vault_script_inspection() -> None:
-    for agent_name in (
-        "wayfinder",
-        "wayfinder-research",
-        "wayfinder-quant",
-        "wayfinder-visual",
-    ):
-        permission = _agent_permission(agent_name)
-        assert permission["external_directory"]["*"] == "allow"
-
-
 def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
     primary = _agent_permission("wayfinder")
     assert {
@@ -163,7 +150,6 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_core_execute": "ask",
         "wayfinder_core_run_script": "ask",
         "wayfinder_core_run_strategy": "ask",
-        "wayfinder_core_runner_status": "allow",
         "wayfinder_core_runner": "ask",
         "wayfinder_hyperliquid_place_*": "ask",
         "wayfinder_hyperliquid_cancel_order": "ask",

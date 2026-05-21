@@ -75,6 +75,7 @@ from wayfinder_paths.mcp.tools.hyperliquid import (
     hyperliquid_cancel_order,
     hyperliquid_deposit,
     hyperliquid_get_state,
+    hyperliquid_get_trade_asset,
     hyperliquid_place_limit_order,
     hyperliquid_place_market_order,
     hyperliquid_place_trigger_order,
@@ -160,6 +161,7 @@ def build_mcp(
     # ─── hyperliquid_* ─────────────────────────────────────────────────
     # Coin naming reference: /using-hyperliquid-adapter/rules/coin-naming.md.
     mcp.tool()(hyperliquid_get_state)
+    mcp.tool()(hyperliquid_get_trade_asset)
     mcp.tool()(hyperliquid_search_market)
     mcp.tool()(hyperliquid_search_mid_prices)
     mcp.tool()(hyperliquid_place_market_order)

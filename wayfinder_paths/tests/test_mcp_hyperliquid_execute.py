@@ -9,6 +9,7 @@ import pytest
 from wayfinder_paths.adapters.hyperliquid_adapter import HyperliquidAdapter
 from wayfinder_paths.mcp.tools.hyperliquid import (
     hyperliquid_get_state,
+    hyperliquid_get_trade_asset,
     hyperliquid_place_market_order,
     hyperliquid_withdraw,
 )
@@ -50,6 +51,29 @@ class _FakeExecutionAdapter:
             "markPx": "100",
             "maxTradeSzs": ["0.12", "0.56"],
         }
+        self.meta_and_asset_ctxs = [
+            {
+                "universe": [
+                    {
+                        "name": "BTC",
+                        "szDecimals": 4,
+                        "maxLeverage": 25,
+                        "marginTableId": 55,
+                    }
+                ]
+            },
+            [
+                {
+                    "funding": "0.00001",
+                    "openInterest": "123.45",
+                    "dayNtlVlm": "98765.43",
+                    "midPx": "100.1",
+                    "oraclePx": "100.2",
+                    "premium": "0.0002",
+                    "impactPxs": ["99.9", "100.3"],
+                }
+            ],
+        ]
         self.filled_size = filled_size
         self.fill_price = fill_price
 
@@ -79,7 +103,14 @@ class _FakeExecutionAdapter:
                     "total": "21.50",
                     "hold": "20.57",
                     "entryNtl": "0.0",
-                }
+                },
+                {
+                    "coin": "+41",
+                    "token": 41,
+                    "total": "2",
+                    "hold": "0",
+                    "entryNtl": "1.0",
+                },
             ],
             "tokenToAvailableAfterMaintenance": [[0, "19.94"]],
         }
@@ -89,6 +120,9 @@ class _FakeExecutionAdapter:
 
     async def get_active_asset_data(self, _address: str, _asset_name: str):
         return True, self.active_asset_data
+
+    async def get_meta_and_asset_ctxs(self):
+        return True, self.meta_and_asset_ctxs
 
     async def get_max_builder_fee(self, *, user: str, builder: str):
         return True, 100
@@ -199,7 +233,7 @@ async def test_hyperliquid_withdraw(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_get_state_includes_active_asset_trade_context():
+async def test_hyperliquid_get_state_returns_compact_account_state():
     fake = _FakeExecutionAdapter(
         user_state={
             "assetPositions": [
@@ -227,23 +261,145 @@ async def test_hyperliquid_get_state_includes_active_asset_trade_context():
             return_value=fake,
         ),
     ):
-        out = await hyperliquid_get_state(label="main", asset_name="BTC-USDC")
+        out = await hyperliquid_get_state(label="main")
 
     assert out["ok"] is True
-    context = out["result"]["trade_context"]
-    assert context["available_to_trade_long_usd"] == 12.34
-    assert context["available_to_trade_short_usd"] == 56.78
-    assert context["available_to_trade_margin_long_usd"] == 12.34
-    assert context["available_margin_long_usd"] == 12.34
-    assert context["max_order_notional_long_usd"] == pytest.approx(12.0)
-    assert context["position"]["side"] == "short"
-    assert context["position"]["margin_mode"] == "cross"
-    assert context["account_collateral"]["free_usdc"] == pytest.approx(0.93)
-    assert out["result"]["account_collateral"]["free_usdc"] == pytest.approx(0.93)
-    assert (
-        out["result"]["account_collateral"]["available_after_maintenance_usdc"] == 19.94
+    result = out["result"]
+    assert "trade_context" not in result
+    assert "account_collateral" not in result
+    assert result["account_abstraction"]["state"] == "unifiedAccount"
+    assert result["perp"]["state"]["assetPositions"][0]["position"]["coin"] == "BTC"
+    assert [bal["coin"] for bal in result["spot"]["state"]["balances"]] == ["USDC"]
+    assert result["outcomes"]["positions"] == [
+        {
+            "coin": "+41",
+            "outcome_id": 4,
+            "side": 1,
+            "total": "2",
+            "hold": "0",
+            "entryNtl": "1.0",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_get_trade_asset_uses_active_asset_available_to_trade():
+    fake = _FakeExecutionAdapter(
+        user_state={
+            "assetPositions": [
+                {
+                    "position": {
+                        "coin": "BTC",
+                        "szi": "-0.25",
+                        "entryPx": "100",
+                        "positionValue": "25",
+                        "marginUsed": "5",
+                        "leverage": {"type": "cross", "value": 5},
+                    }
+                }
+            ]
+        }
     )
-    assert out["result"]["account_abstraction"]["state"] == "unifiedAccount"
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.resolve_wallet_address",
+            new=AsyncMock(return_value=("0x1234", None)),
+        ),
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.HyperliquidAdapter",
+            return_value=fake,
+        ),
+    ):
+        out = await hyperliquid_get_trade_asset(label="main", asset_name="BTC-USDC")
+
+    assert out["ok"] is True
+    result = out["result"]
+    assert result["long"]["available_margin_usd"] == 12.34
+    assert result["short"]["available_margin_usd"] == 56.78
+    assert result["long"]["max_order_notional_usd"] == pytest.approx(12.0)
+    assert result["position"]["side"] == "short"
+    assert result["position"]["margin_mode"] == "cross"
+    assert result["market_type"] == "perp"
+    assert result["max_leverage"] == 25
+    assert result["compatible_margin_modes"] == ["cross", "isolated"]
+    assert result["market"]["size_decimals"] == 4
+    assert result["market"]["margin_table_id"] == 55
+    assert result["market"]["funding_rate_hourly"] == pytest.approx(0.00001)
+    assert result["market"]["funding_apr"] == pytest.approx(0.0876)
+    assert result["market"]["open_interest"] == pytest.approx(123.45)
+    assert result["market"]["day_notional_volume_usd"] == pytest.approx(98765.43)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_get_trade_asset_reports_isolated_only_metadata():
+    fake = _FakeExecutionAdapter()
+    fake.meta_and_asset_ctxs = [
+        {
+            "universe": [
+                {
+                    "name": "BTC",
+                    "szDecimals": 0,
+                    "maxLeverage": 3,
+                    "marginMode": "noCross",
+                    "onlyIsolated": True,
+                    "marginTableId": 53,
+                    "isDelisted": True,
+                }
+            ]
+        },
+        [{}],
+    ]
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.resolve_wallet_address",
+            new=AsyncMock(return_value=("0x1234", None)),
+        ),
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.HyperliquidAdapter",
+            return_value=fake,
+        ),
+    ):
+        out = await hyperliquid_get_trade_asset(label="main", asset_name="BTC-USDC")
+
+    assert out["ok"] is True
+    result = out["result"]
+    assert result["max_leverage"] == 3
+    assert result["compatible_margin_modes"] == ["isolated"]
+    assert result["margin_mode_restriction"] == "noCross"
+    assert result["can_remove_isolated_margin"] is True
+    assert result["market"]["is_delisted"] is True
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_get_trade_asset_derives_capacity_from_max_trade_size_fallback():
+    fake = _FakeExecutionAdapter(
+        active_asset_data={
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["0.2", "0.4"],
+        }
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.resolve_wallet_address",
+            new=AsyncMock(return_value=("0x1234", None)),
+        ),
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid.HyperliquidAdapter",
+            return_value=fake,
+        ),
+    ):
+        out = await hyperliquid_get_trade_asset(label="main", asset_name="BTC-USDC")
+
+    assert out["ok"] is True
+    long = out["result"]["long"]
+    assert "capacity_source" not in long
+    assert long["available_margin_usd"] == pytest.approx(4.0)
+    assert long["max_order_notional_usd"] == pytest.approx(20.0)
+    assert long["max_base_size"] == pytest.approx(0.2)
 
 
 @pytest.mark.asyncio
@@ -340,6 +496,38 @@ async def test_hyperliquid_market_order_rejects_notional_over_available_margin()
     assert details["available_margin_usd"] == 1.0
     assert details["required_margin_usd"] == 2.0
     assert details["max_order_notional_usd"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_market_order_uses_max_trade_size_capacity_fallback():
+    fake = _FakeExecutionAdapter(
+        active_asset_data={
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["0.2", "0.2"],
+        }
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_market_order(
+            wallet_label="main",
+            asset_name="BTC-USDC",
+            is_buy=True,
+            usd_amount=25,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "insufficient_hyperliquid_margin"
+    details = out["error"]["details"]
+    assert details["available_to_trade_margin_usd"] == pytest.approx(4.0)
+    assert details["max_order_notional_usd"] == pytest.approx(20.0)
+    assert details["max_trade_size"] == pytest.approx(0.2)
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ from wayfinder_paths.core.constants.hyperliquid import (
 )
 from wayfinder_paths.core.utils.tokens import build_send_transaction
 from wayfinder_paths.core.utils.transaction import send_transaction
+from wayfinder_paths.mcp.arg_validation import optional_int
 from wayfinder_paths.mcp.scripting import get_adapter
 from wayfinder_paths.mcp.state.profile_store import WalletProfileStore
 from wayfinder_paths.mcp.utils import (
@@ -304,94 +305,59 @@ def _active_asset_float_pair(
     return _float_or_none(values[0]), _float_or_none(values[1])
 
 
-def _summarize_unified_collateral(spot_state: dict[str, Any] | None) -> dict[str, Any]:
-    """Summarize unified-account balances without treating them as order capacity."""
-    if not isinstance(spot_state, dict):
-        return {
-            "success": False,
-            "note": "spotClearinghouseState unavailable; account-level collateral could not be summarized.",
-        }
-
-    available_after_maintenance: dict[int, float] = {}
-    raw_available = spot_state.get("tokenToAvailableAfterMaintenance")
-    if isinstance(raw_available, list):
-        for item in raw_available:
-            if not isinstance(item, (list, tuple)) or len(item) < 2:
-                continue
-            try:
-                token = int(item[0])
-            except (TypeError, ValueError):
-                continue
-            value = _float_or_none(item[1])
-            if value is not None:
-                available_after_maintenance[token] = value
-
-    balances: list[dict[str, Any]] = []
-    for bal in spot_state.get("balances", []):
-        if not isinstance(bal, dict):
-            continue
-        total = _float_or_none(bal.get("total"))
-        hold = _float_or_none(bal.get("hold"))
-        token_raw = bal.get("token")
-        try:
-            token = int(token_raw)
-        except (TypeError, ValueError):
-            token = None
-        free = (
-            max(0.0, float(total) - float(hold))
-            if total is not None and hold is not None
-            else None
-        )
-        entry = {
-            "coin": bal.get("coin"),
-            "token": token,
-            "total": total,
-            "hold": hold,
-            "free": free,
-            "available_after_maintenance": available_after_maintenance.get(token)
-            if token is not None
-            else None,
-            "raw": bal,
-        }
-        if bal.get("coin") == "USDC" or token == 0:
-            entry["free_usdc"] = free
-        balances.append(entry)
-
-    usdc = next(
-        (bal for bal in balances if bal.get("coin") == "USDC" or bal.get("token") == 0),
-        None,
-    )
-    return {
-        "success": True,
-        "balances": balances,
-        "usdc": usdc,
-        "free_usdc": usdc.get("free") if isinstance(usdc, dict) else None,
-        "available_after_maintenance_usdc": usdc.get("available_after_maintenance")
-        if isinstance(usdc, dict)
-        else None,
-        "note": "Unified account collateral is balance minus hold from spotClearinghouseState. Use activeAssetData.availableToTrade for per-asset order capacity.",
-    }
-
-
-def _max_order_notional_usd(
+def _capacity_notional_usd(
     *,
-    available_to_trade_margin_usd: float | None,
+    available_margin_usd: float | None,
     leverage: float | None,
-    max_trade_size: float | None,
+    max_base_size: float | None,
     price: float | None,
 ) -> float | None:
     candidates: list[float] = []
+    if available_margin_usd is not None and leverage is not None and leverage > 0:
+        candidates.append(max(0.0, available_margin_usd * leverage))
+    if max_base_size is not None and price is not None and price > 0:
+        candidates.append(max(0.0, max_base_size * price))
+    return min(candidates) if candidates else None
+
+
+def _trade_capacity(
+    *,
+    available_to_trade_usd: float | None,
+    leverage: float | None,
+    max_trade_size: float | None,
+    price: float | None,
+) -> dict[str, Any]:
+    available_margin = available_to_trade_usd
     if (
-        available_to_trade_margin_usd is not None
+        available_margin is None
+        and max_trade_size is not None
+        and price is not None
+        and price > 0
         and leverage is not None
         and leverage > 0
     ):
-        candidates.append(
-            max(0.0, float(available_to_trade_margin_usd) * float(leverage))
-        )
-    if max_trade_size is not None and price is not None and price > 0:
-        candidates.append(max(0.0, float(max_trade_size) * float(price)))
-    return min(candidates) if candidates else None
+        available_margin = max_trade_size * price / leverage
+
+    max_notional = _capacity_notional_usd(
+        available_margin_usd=available_margin,
+        leverage=leverage,
+        max_base_size=max_trade_size,
+        price=price,
+    )
+    max_base_size = max_trade_size
+    if (
+        max_base_size is None
+        and max_notional is not None
+        and price is not None
+        and price > 0
+    ):
+        max_base_size = max_notional / price
+
+    return {
+        "available_margin_usd": available_margin,
+        "max_order_notional_usd": max_notional,
+        "max_base_size": max_base_size,
+    }
 
 
 def _summarize_active_asset_data(
@@ -413,45 +379,160 @@ def _summarize_active_asset_data(
         isolated_raw_usd = _float_or_none(leverage.get("rawUsd"))
 
     mark_px = _float_or_none(active_asset_data.get("markPx"))
-    summary = {
-        "available_to_trade_long_usd": available_long,
-        "available_to_trade_short_usd": available_short,
-        "available_to_trade_margin_long_usd": available_long,
-        "available_to_trade_margin_short_usd": available_short,
-        # Compatibility aliases. In unified account mode this is not the raw
-        # account balance; it is side-specific activeAssetData capacity.
-        "available_margin_long_usd": available_long,
-        "available_margin_short_usd": available_short,
-        "max_trade_size_long": max_size_long,
-        "max_trade_size_short": max_size_short,
-        "mark_px": mark_px,
-        "leverage": leverage_value,
-        "margin_mode": margin_mode,
-        "isolated_raw_usd": isolated_raw_usd,
-        "raw": active_asset_data,
-    }
-    summary["max_order_notional_long_usd"] = _max_order_notional_usd(
-        available_to_trade_margin_usd=available_long,
+    long = _trade_capacity(
+        available_to_trade_usd=available_long,
         leverage=leverage_value,
         max_trade_size=max_size_long,
         price=mark_px,
     )
-    summary["max_order_notional_short_usd"] = _max_order_notional_usd(
-        available_to_trade_margin_usd=available_short,
+    short = _trade_capacity(
+        available_to_trade_usd=available_short,
         leverage=leverage_value,
         max_trade_size=max_size_short,
         price=mark_px,
     )
-    return summary
+    return {
+        "mark_px": mark_px,
+        "leverage": leverage_value,
+        "margin_mode": margin_mode,
+        "isolated_raw_usd": isolated_raw_usd,
+        "long": long,
+        "short": short,
+        "raw": active_asset_data,
+    }
 
 
-async def _build_trade_context(
+def _market_info_from_meta_and_asset_ctxs(
+    meta_and_ctxs: Any, coin: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not isinstance(meta_and_ctxs, list) or not meta_and_ctxs:
+        return None, None
+
+    meta = meta_and_ctxs[0] if isinstance(meta_and_ctxs[0], dict) else {}
+    universe = meta.get("universe")
+    if not isinstance(universe, list):
+        return None, None
+
+    ctxs = meta_and_ctxs[1] if len(meta_and_ctxs) > 1 else []
+    for index, entry in enumerate(universe):
+        if not isinstance(entry, dict) or entry.get("name") != coin:
+            continue
+        ctx = ctxs[index] if isinstance(ctxs, list) and index < len(ctxs) else None
+        return entry, ctx if isinstance(ctx, dict) else None
+    return None, None
+
+
+def _compatible_margin_modes(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {
+            "compatible_margin_modes": ["cross", "isolated"],
+            "margin_mode_restriction": None,
+            "can_remove_isolated_margin": True,
+        }
+
+    restriction = metadata.get("marginMode")
+    only_isolated = bool(metadata.get("onlyIsolated"))
+    if restriction == "strictIsolated":
+        return {
+            "compatible_margin_modes": ["isolated"],
+            "margin_mode_restriction": "strictIsolated",
+            "can_remove_isolated_margin": False,
+        }
+    if restriction == "noCross":
+        return {
+            "compatible_margin_modes": ["isolated"],
+            "margin_mode_restriction": "noCross",
+            "can_remove_isolated_margin": True,
+        }
+    if only_isolated:
+        return {
+            "compatible_margin_modes": ["isolated"],
+            "margin_mode_restriction": "onlyIsolated",
+            "can_remove_isolated_margin": None,
+        }
+    return {
+        "compatible_margin_modes": ["cross", "isolated"],
+        "margin_mode_restriction": restriction,
+        "can_remove_isolated_margin": True,
+    }
+
+
+def _summarize_market_context(
+    metadata: dict[str, Any] | None,
+    asset_ctx: dict[str, Any] | None,
+) -> dict[str, Any]:
+    capabilities = _compatible_margin_modes(metadata)
+    funding_rate_hourly = (
+        _float_or_none(asset_ctx.get("funding"))
+        if isinstance(asset_ctx, dict)
+        else None
+    )
+    impact_px_bid: float | None = None
+    impact_px_ask: float | None = None
+    if isinstance(asset_ctx, dict):
+        impact_pxs = asset_ctx.get("impactPxs")
+        if isinstance(impact_pxs, list) and len(impact_pxs) >= 2:
+            impact_px_bid = _float_or_none(impact_pxs[0])
+            impact_px_ask = _float_or_none(impact_pxs[1])
+
+    return {
+        "max_leverage": optional_int(
+            metadata.get("maxLeverage"), field_name="maxLeverage"
+        )
+        if isinstance(metadata, dict) and metadata.get("maxLeverage") is not None
+        else None,
+        "size_decimals": optional_int(
+            metadata.get("szDecimals"), field_name="szDecimals"
+        )
+        if isinstance(metadata, dict) and metadata.get("szDecimals") is not None
+        else None,
+        "margin_table_id": optional_int(
+            metadata.get("marginTableId"), field_name="marginTableId"
+        )
+        if isinstance(metadata, dict) and metadata.get("marginTableId") is not None
+        else None,
+        "is_delisted": bool(metadata.get("isDelisted"))
+        if isinstance(metadata, dict) and metadata.get("isDelisted") is not None
+        else False,
+        "growth_mode": metadata.get("growthMode")
+        if isinstance(metadata, dict)
+        else None,
+        "last_growth_mode_change_time": metadata.get("lastGrowthModeChangeTime")
+        if isinstance(metadata, dict)
+        else None,
+        "funding_rate_hourly": funding_rate_hourly,
+        "funding_apr": funding_rate_hourly * 24 * 365
+        if funding_rate_hourly is not None
+        else None,
+        "open_interest": _float_or_none(asset_ctx.get("openInterest"))
+        if isinstance(asset_ctx, dict)
+        else None,
+        "day_notional_volume_usd": _float_or_none(asset_ctx.get("dayNtlVlm"))
+        if isinstance(asset_ctx, dict)
+        else None,
+        "mid_px": _float_or_none(asset_ctx.get("midPx"))
+        if isinstance(asset_ctx, dict)
+        else None,
+        "oracle_px": _float_or_none(asset_ctx.get("oraclePx"))
+        if isinstance(asset_ctx, dict)
+        else None,
+        "premium": _float_or_none(asset_ctx.get("premium"))
+        if isinstance(asset_ctx, dict)
+        else None,
+        "impact_px_bid": impact_px_bid,
+        "impact_px_ask": impact_px_ask,
+        "raw_metadata": metadata,
+        "raw_context": asset_ctx,
+        **capabilities,
+    }
+
+
+async def _build_trade_asset(
     *,
     adapter: HyperliquidAdapter,
     address: str,
     asset_name: str,
     perp_state: dict[str, Any] | None,
-    account_collateral: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         coin = adapter.active_asset_data_coin(asset_name)
@@ -461,6 +542,13 @@ async def _build_trade_context(
     active_ok, active = await adapter.get_active_asset_data(address, asset_name)
     if not active_ok or not isinstance(active, dict):
         return {"success": False, "coin": coin, "error": str(active)}
+
+    metadata: dict[str, Any] | None = None
+    asset_ctx: dict[str, Any] | None = None
+    meta_ok, meta_and_ctxs = await adapter.get_meta_and_asset_ctxs()
+    if meta_ok:
+        metadata, asset_ctx = _market_info_from_meta_and_asset_ctxs(meta_and_ctxs, coin)
+    market = _summarize_market_context(metadata, asset_ctx)
 
     position = None
     if isinstance(perp_state, dict):
@@ -473,7 +561,12 @@ async def _build_trade_context(
             "asset_name": asset_name,
             "coin": coin,
             "position": _normalize_position(position),
-            "account_collateral": account_collateral,
+            "market_type": adapter.get_market_type(asset_name),
+            "market": market,
+            "max_leverage": market["max_leverage"],
+            "compatible_margin_modes": market["compatible_margin_modes"],
+            "margin_mode_restriction": market["margin_mode_restriction"],
+            "can_remove_isolated_margin": market["can_remove_isolated_margin"],
         }
     )
     return summary
@@ -584,13 +677,14 @@ async def _reject_unsafe_perp_order(
             return None
 
     side = "long" if is_buy else "short"
-    available_to_trade_margin = summary[f"available_to_trade_margin_{side}_usd"]
-    max_trade_size = summary[f"max_trade_size_{side}"]
+    side_context = summary[side]
+    available_margin = side_context["available_margin_usd"]
+    max_trade_size = side_context["max_base_size"]
     leverage = summary["leverage"]
-    capacity_notional = _max_order_notional_usd(
-        available_to_trade_margin_usd=available_to_trade_margin,
+    capacity_notional = _capacity_notional_usd(
+        available_margin_usd=available_margin,
         leverage=leverage,
-        max_trade_size=max_trade_size,
+        max_base_size=max_trade_size,
         price=float(price_used),
     )
     requested_notional = opening_size * float(price_used)
@@ -609,6 +703,7 @@ async def _reject_unsafe_perp_order(
                 "coin": coin,
                 "side": side,
                 "active_asset_data": summary,
+                "side_context": side_context,
             },
         )
 
@@ -626,11 +721,12 @@ async def _reject_unsafe_perp_order(
                 "price_used": float(price_used),
                 "requested_notional_usd": requested_notional,
                 "max_order_notional_usd": capacity_notional,
-                "available_to_trade_margin_usd": available_to_trade_margin,
-                "available_margin_usd": available_to_trade_margin,
+                "available_to_trade_margin_usd": available_margin,
+                "available_margin_usd": available_margin,
                 "leverage": leverage,
                 "required_margin_usd": required_margin,
                 "max_trade_size": max_trade_size,
+                "side_context": side_context,
                 "reduce_only": bool(reduce_only),
                 "allow_flip": bool(allow_flip),
             },
@@ -1577,15 +1673,8 @@ async def hyperliquid_place_limit_order(
 
 
 @catch_errors
-async def hyperliquid_get_state(
-    label: str, asset_name: str | None = None
-) -> dict[str, Any]:
-    """Return perp + spot + outcome state for a Hyperliquid wallet in one shot.
-
-    Pass `asset_name` to include frontend-equivalent trade context from
-    Hyperliquid `activeAssetData`, including side-specific available-to-trade
-    capacity for long and short in unified account mode.
-    """
+async def hyperliquid_get_state(label: str) -> dict[str, Any]:
+    """Return perp + spot + outcome state for a Hyperliquid wallet in one shot."""
     addr, _ = await resolve_wallet_address(wallet_label=label)
     if not addr:
         return err("not_found", f"Wallet not found: {label}")
@@ -1618,34 +1707,56 @@ async def hyperliquid_get_state(
                 spot_balances.append(bal)
         spot["balances"] = spot_balances
 
-    account_collateral = _summarize_unified_collateral(
-        spot if isinstance(spot, dict) else None
-    )
-    trade_context = None
-    if asset_name:
-        trade_context = await _build_trade_context(
-            adapter=adapter,
-            address=addr,
-            asset_name=asset_name,
-            perp_state=perp if isinstance(perp, dict) else None,
-            account_collateral=account_collateral,
-        )
-
     return ok(
         {
             "label": label,
             "address": addr,
             "perp": {"success": perp_ok, "state": perp},
             "spot": {"success": spot_ok, "state": spot},
-            "account_collateral": account_collateral,
             "account_abstraction": {
                 "success": abstraction_ok,
                 "state": abstraction,
-                "note": "In unified account mode, spotClearinghouseState is the source for balances and holds; activeAssetData is used for side-specific order capacity.",
             },
             "outcomes": {"success": spot_ok, "positions": outcome_positions},
-            "trade_context": trade_context,
         }
+    )
+
+
+@catch_errors
+async def hyperliquid_get_trade_asset(label: str, asset_name: str) -> dict[str, Any]:
+    """Return selected perp/HIP-3 trade capacity from activeAssetData.
+
+    The response includes current account-side capacity (`long`/`short`), market
+    metadata (`max_leverage`, `compatible_margin_modes`, size decimals,
+    margin-table id), and live market context such as funding/open interest when
+    available from `metaAndAssetCtxs`.
+
+    Args:
+        label: Configured Wayfinder wallet label in the current runtime, such as
+            "main" or "free-seeking-moon primary wallet".
+        asset_name: Hyperliquid perp/HIP-3 market, such as "ETH-USDC",
+            "HYPE-USDC", or "xyz:NVDA".
+    """
+    addr, _ = await resolve_wallet_address(wallet_label=label)
+    if not addr:
+        return err("not_found", f"Wallet not found: {label}")
+
+    adapter = HyperliquidAdapter()
+    perp_ok, perp = await adapter.get_user_state(addr)
+    if not perp_ok or not isinstance(perp, dict):
+        return err(
+            "state_error",
+            "Could not fetch Hyperliquid perp state for trade asset.",
+            details={"asset_name": asset_name, "error": str(perp)},
+        )
+
+    return ok(
+        await _build_trade_asset(
+            adapter=adapter,
+            address=addr,
+            asset_name=asset_name,
+            perp_state=perp,
+        )
     )
 
 

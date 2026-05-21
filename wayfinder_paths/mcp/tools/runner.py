@@ -124,11 +124,9 @@ async def core_runner(
       - If `add_job`, `delete_job`, `update_job`, or `run_once` times out at the
         caller, treat the mutation result as unknown and inspect `status`,
         `job_runs`, or `run_report` before retrying.
-      - Generated monitor scripts should keep durable state with
-        `wayfinder_paths.runner.monitor_state` (`monitor_state_path`,
-        `read_monitor_state`, `write_monitor_state`). This stores JSON under
-        `$WAYFINDER_RUNNER_DIR/job_state/$WAYFINDER_KV_NAMESPACE/`; never store
-        monitor/checkpoint/alert state in `/tmp`.
+      - Generated monitor scripts should store durable state under the runner
+        directory or `.wayfinder_runs/state`. Do not store monitor state in
+        `/tmp`; restart-pruned state can duplicate alerts.
       - First/seed runs should not send external alerts unless explicitly
         requested. Position-bound monitors should verify live side, size,
         leverage/mode, and notional before alerting.
