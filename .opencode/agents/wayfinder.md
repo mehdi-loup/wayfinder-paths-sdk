@@ -148,7 +148,7 @@ Before any order is placed, the Hyperliquid Adapter enforces [Unified Account mo
 
 If a user is on a legacy split account, migration may require closing positions, moving balances to spot, then enabling UnifiedAccountMode. `ensure_unified_account` runs before order placement, but can fail mid-state if open positions or stuck spot balances block the switch.
 
-HIP-3 builder dexes each have their own collateral pool separate from spot / unified balance. Deposits go into the dex's own ledger; you cannot fund cross-dex from unified spot.
+Each HIP-3 dex holds its own collateral ledger — fund the specific dex, not unified spot.
 
 #### Notes
 
