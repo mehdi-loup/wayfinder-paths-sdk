@@ -10,17 +10,135 @@
 
 - Adapter: `wayfinder_paths/adapters/euler_v2_adapter/adapter.py`
 - Deployments/perspectives: `wayfinder_paths/core/constants/euler_v2_contracts.py`
+- Current curated vault labels: Euler `euler-labels` repository via
+  `adapter.get_labelled_vaults(...)`
+- Indexed API reads: Euler V3 API preview via `adapter.get_indexed_vaults(...)`,
+  `adapter.get_euler_earn_vaults(...)`, `adapter.resolve_vault(...)`, and
+  `adapter.get_offchain_prices(...)`
 
 Terminology:
 - **Vault** = market address and also the ERC-4626 share token.
 - **Underlying** = `vault.asset()`
 - **Debt token** = `vault.dToken()`
+- **EulerEarn vault** = ERC-4626 meta-vault that allocates into EVK/other
+  strategies; not a borrowable EVK liability vault.
+- **EulerSwap** = swap/multiply periphery surface. This adapter exposes current
+  contract addresses but does not build or execute order-flow payloads.
+
+## Source selection
+
+- For current curated EVK/Earn discovery, prefer
+  `get_labelled_vaults(chain_id=...)`.
+- For indexed summaries, history-friendly data, prices, or Earn summaries, use
+  the Euler V3 API preview methods.
+- For exact current on-chain EVK state, use lens-backed methods:
+  `get_vault_info_full(...)`, `get_all_markets(...)`, and
+  `get_full_user_state(...)`.
+- `get_verified_vaults(...)` still reads Perspective `verifiedArray()` for
+  on-chain compatibility. Euler docs mark governed Perspective discovery as
+  deprecated for verified metadata, so do not treat it as the only current source
+  of truth.
+
+V3 API conventions:
+- Raw on-chain amounts are strings to preserve bigint precision.
+- APYs from V3 API endpoints are percent values (`5.25` means 5.25%).
+- Lens-backed `get_all_markets(...)` converts ray APYs to decimal fractions
+  (`0.0525` means 5.25%).
 
 ## Ad-hoc read scripts
 
 All read scripts go under `.wayfinder_runs/` and use `get_adapter()`:
 
-### List verified vaults (by perspective)
+### Current curated EVK/Earn vaults (Euler labels)
+
+```python
+"""Fetch current Euler labels for curated EVK and Earn vaults."""
+import asyncio
+from wayfinder_paths.mcp.scripting import get_adapter
+from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
+from wayfinder_paths.core.constants.chains import CHAIN_ID_BASE
+
+async def main():
+    adapter = await get_adapter(EulerV2Adapter)
+    ok, labels = await adapter.get_labelled_vaults(chain_id=CHAIN_ID_BASE)
+    if not ok:
+        raise RuntimeError(labels)
+    print("evk_vaults=", labels["evk_vaults"][:20])
+    print("earn_vaults=", labels["earn_vaults"][:20])
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Indexed EVK vault summaries (Euler V3 API)
+
+```python
+"""Fetch indexed Euler EVK vault summaries."""
+import asyncio
+from wayfinder_paths.mcp.scripting import get_adapter
+from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
+from wayfinder_paths.core.constants.chains import CHAIN_ID_BASE
+
+async def main():
+    adapter = await get_adapter(EulerV2Adapter)
+    ok, res = await adapter.get_indexed_vaults(
+        chain_id=CHAIN_ID_BASE,
+        limit=20,
+        fields=["chainId", "address", "name", "symbol", "asset", "supplyApy", "borrowApy", "totalAssets"],
+    )
+    if not ok:
+        raise RuntimeError(res)
+    for v in res["data"] or []:
+        print(v["symbol"], v["address"], "supplyApyPct=", v.get("supplyApy"))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Indexed EulerEarn vault summaries
+
+```python
+"""Fetch indexed EulerEarn vault summaries."""
+import asyncio
+from wayfinder_paths.mcp.scripting import get_adapter
+from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
+from wayfinder_paths.core.constants.chains import CHAIN_ID_BASE
+
+async def main():
+    adapter = await get_adapter(EulerV2Adapter)
+    ok, res = await adapter.get_euler_earn_vaults(chain_id=CHAIN_ID_BASE, limit=20)
+    if not ok:
+        raise RuntimeError(res)
+    for v in res["data"] or []:
+        print(v["symbol"], v["address"], "apy30dPct=", v.get("apy30d"))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Off-chain prices (Euler V3 API)
+
+```python
+"""Fetch current Euler off-chain USD prices for tokens."""
+import asyncio
+from wayfinder_paths.mcp.scripting import get_adapter
+from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
+from wayfinder_paths.core.constants.chains import CHAIN_ID_BASE
+
+USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+async def main():
+    adapter = await get_adapter(EulerV2Adapter)
+    ok, res = await adapter.get_offchain_prices(chain_id=CHAIN_ID_BASE, addresses=[USDC])
+    if not ok:
+        raise RuntimeError(res)
+    print(res["data"])
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### List verified vaults (deprecated Perspective compatibility)
 
 ```python
 """List Euler v2 verified vaults for a chain/perspective."""
@@ -124,7 +242,13 @@ if __name__ == "__main__":
 
 | Method | Purpose | Wallet needed? |
 |--------|---------|----------------|
-| `get_verified_vaults(chain_id, perspective?, limit?)` | Vault addresses (verified list) | No |
+| `get_labelled_vaults(chain_id, include_products?, include_earn?)` | Current curated EVK/Earn vault addresses from Euler labels | No |
+| `get_indexed_vaults(chain_id, limit?, offset?, fields?, sort?, asset?, min_tvl?, max_tvl?, visibility?)` | Euler V3 indexed EVK vault summaries | No |
+| `get_euler_earn_vaults(chain_id, limit?, offset?)` | Euler V3 indexed EulerEarn vault summaries | No |
+| `resolve_vault(chain_id, address)` | Resolve whether an address is an indexed EVK/Earn vault | No |
+| `get_offchain_prices(chain_id, addresses)` | Euler V3 token USD prices | No |
+| `get_protocol_contracts(chain_id)` | Current EVC/EVK/Earn/Swap/lens/periphery addresses | No |
+| `get_verified_vaults(chain_id, perspective?, limit?)` | Perspective `verifiedArray()` vault addresses; deprecated as sole verified metadata source | No |
 | `get_all_markets(chain_id, perspective?, limit?, concurrency?)` | Vault list + supply/borrow APYs + caps + LTV rows | No |
 | `get_vault_info_full(chain_id, vault)` | VaultLens `getVaultInfoFull` output | No |
 | `get_full_user_state(chain_id, account, include_zero_positions?)` | Enabled vaults + balances + flags for one chain | No (if you pass `account`) |

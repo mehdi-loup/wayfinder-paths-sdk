@@ -7,4 +7,18 @@
 
 - Markets are **vaults** (the vault address is also the ERC-4626 share token).
 - The adapter uses **EVC (Ethereum Vault Connector)** batching for vault operations.
-
+- Contract addresses are sourced from Euler's `euler-interfaces/EulerChains.json`
+  registry and include EVK, EVC, EulerEarn, EulerSwap, lenses, perspectives, and
+  swap periphery addresses.
+- Use `get_labelled_vaults(...)` for current curated EVK/Earn vault discovery
+  from `euler-labels`. On-chain `get_verified_vaults(...)` still works for
+  Perspective compatibility, but Euler docs mark governed Perspective discovery
+  as deprecated for verified metadata.
+- Use `get_indexed_vaults(...)`, `get_euler_earn_vaults(...)`,
+  `resolve_vault(...)`, and `get_offchain_prices(...)` for Euler V3 API preview
+  reads. The V3 API returns APYs as percent values and raw on-chain amounts as
+  strings.
+- `get_all_markets(...)` remains an on-chain lens read for EVK vault state and
+  returns APYs as decimal fractions.
+- EulerSwap/order-flow execution is not implemented here. The registry exposes
+  Swapper and SwapVerifier addresses for discovery and safety review only.

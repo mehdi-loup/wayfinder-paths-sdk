@@ -3,6 +3,10 @@ entrypoint: "adapters.euler_v2_adapter.adapter.EulerV2Adapter"
 capabilities:
   - "market.list"
   - "market.read"
+  - "market.indexed"
+  - "vault.list"
+  - "price.read"
+  - "contracts.read"
   - "position.read"
   - "lending.lend"
   - "lending.unlend"
@@ -11,4 +15,3 @@ capabilities:
   - "collateral.set"
   - "collateral.remove"
 dependencies: []
-

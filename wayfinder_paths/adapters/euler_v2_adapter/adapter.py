@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import os
 from typing import Any
 
+import httpx
 from eth_utils import to_checksum_address
 from loguru import logger
 
 from wayfinder_paths.core.adapters.BaseAdapter import BaseAdapter
 from wayfinder_paths.core.constants import ZERO_ADDRESS
-from wayfinder_paths.core.constants.base import MAX_UINT256
+from wayfinder_paths.core.constants.base import (
+    DEFAULT_HTTP_HEADERS,
+    DEFAULT_HTTP_TIMEOUT,
+    MAX_UINT256,
+)
 from wayfinder_paths.core.constants.euler_v2_abi import (
     ACCOUNT_LENS_ABI,
     EVAULT_ABI,
@@ -23,6 +30,11 @@ from wayfinder_paths.core.utils.interest import RAY
 from wayfinder_paths.core.utils.tokens import ensure_allowance
 from wayfinder_paths.core.utils.transaction import encode_call, send_transaction
 from wayfinder_paths.core.utils.web3 import web3_from_chain_id
+
+EULER_V3_API_BASE_URL = "https://v3.euler.finance/v3"
+EULER_LABELS_BASE_URL = (
+    "https://raw.githubusercontent.com/euler-xyz/euler-labels/master"
+)
 
 
 def _tuple_to_dict(value: Any, keys: list[str]) -> dict[str, Any]:
@@ -43,6 +55,48 @@ def _ltv_rows(raw: Any) -> list[Any]:
         return list(raw or [])
     except Exception:
         return []
+
+
+def _clean_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in params.items() if v is not None}
+
+
+def _csv(value: str | list[str] | tuple[str, ...] | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return ",".join(str(v) for v in value if str(v).strip())
+
+
+def _dedupe_checksum(addresses: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for address in addresses:
+        checksummed = to_checksum_address(str(address))
+        key = checksummed.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(checksummed)
+    return out
+
+
+def _api_envelope(
+    *,
+    source: str,
+    endpoint: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    meta = payload.get("meta") if isinstance(payload, dict) else None
+    return {
+        "source": source,
+        "endpoint": endpoint,
+        "data": data,
+        "meta": meta or {},
+        "raw": payload,
+    }
 
 
 class EulerV2Adapter(BaseAdapter):
@@ -72,6 +126,15 @@ class EulerV2Adapter(BaseAdapter):
         )
 
         self._asset_by_chain_vault: dict[tuple[int, str], str] = {}
+        self.euler_v3_api_base_url = str(
+            cfg.get("euler_v3_api_base_url") or EULER_V3_API_BASE_URL
+        ).rstrip("/")
+        self.euler_labels_base_url = str(
+            cfg.get("euler_labels_base_url") or EULER_LABELS_BASE_URL
+        ).rstrip("/")
+        self.euler_v3_api_key = str(
+            cfg.get("euler_v3_api_key") or os.environ.get("EULER_V3_API_KEY") or ""
+        ).strip()
 
     @staticmethod
     def _entry(chain_id: int) -> dict[str, Any]:
@@ -87,6 +150,226 @@ class EulerV2Adapter(BaseAdapter):
         if not addr:
             raise ValueError(f"Unknown perspective: {perspective}")
         return to_checksum_address(str(addr))
+
+    async def _http_get_json(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        merged_headers = dict(DEFAULT_HTTP_HEADERS)
+        if headers:
+            merged_headers.update(headers)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(DEFAULT_HTTP_TIMEOUT),
+            follow_redirects=True,
+            headers=merged_headers,
+        ) as client:
+            response = await client.get(url, params=params or {})
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Euler endpoint returned a non-object JSON payload")
+        return payload
+
+    async def _euler_v3_get(
+        self,
+        endpoint: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+        headers: dict[str, str] = {}
+        if self.euler_v3_api_key:
+            headers["X-API-Key"] = self.euler_v3_api_key
+        return await self._http_get_json(
+            f"{self.euler_v3_api_base_url}{endpoint}",
+            params=_clean_params(params or {}),
+            headers=headers,
+        )
+
+    async def _euler_labels_get(
+        self,
+        *,
+        chain_id: int,
+        file_name: str,
+    ) -> dict[str, Any] | list[Any]:
+        if file_name not in {"products.json", "earn-vaults.json"}:
+            raise ValueError(f"Unsupported Euler labels file: {file_name}")
+        url = f"{self.euler_labels_base_url}/{int(chain_id)}/{file_name}"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(DEFAULT_HTTP_TIMEOUT),
+            follow_redirects=True,
+            headers=DEFAULT_HTTP_HEADERS,
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, (dict, list)):
+            raise ValueError("Euler labels endpoint returned unsupported JSON")
+        return payload
+
+    async def get_protocol_contracts(
+        self,
+        *,
+        chain_id: int,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        try:
+            return True, copy.deepcopy(self._entry(int(chain_id)))
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_indexed_vaults(
+        self,
+        *,
+        chain_id: int,
+        limit: int = 100,
+        offset: int = 0,
+        fields: str | list[str] | tuple[str, ...] | None = None,
+        sort: str | None = None,
+        asset: str | None = None,
+        min_tvl: float | None = None,
+        max_tvl: float | None = None,
+        visibility: str | None = None,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read indexed EVK vault summaries from Euler's V3 API preview."""
+        try:
+            params = {
+                "chainId": int(chain_id),
+                "limit": int(limit),
+                "offset": int(offset),
+                "fields": _csv(fields),
+                "sort": sort,
+                "asset": to_checksum_address(asset) if asset else None,
+                "minTvl": min_tvl,
+                "maxTvl": max_tvl,
+                "visibility": visibility,
+            }
+            payload = await self._euler_v3_get("/evk/vaults", params=params)
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint="/evk/vaults",
+                payload=payload,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_euler_earn_vaults(
+        self,
+        *,
+        chain_id: int,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read indexed EulerEarn vault summaries from Euler's V3 API preview."""
+        try:
+            payload = await self._euler_v3_get(
+                "/earn/vaults",
+                params={
+                    "chainId": int(chain_id),
+                    "limit": int(limit),
+                    "offset": int(offset),
+                },
+            )
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint="/earn/vaults",
+                payload=payload,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def resolve_vault(
+        self,
+        *,
+        chain_id: int,
+        address: str,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        try:
+            payload = await self._euler_v3_get(
+                "/resolve/vaults",
+                params={
+                    "chainId": int(chain_id),
+                    "address": to_checksum_address(address),
+                },
+            )
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint="/resolve/vaults",
+                payload=payload,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_offchain_prices(
+        self,
+        *,
+        chain_id: int,
+        addresses: str | list[str] | tuple[str, ...],
+    ) -> tuple[bool, dict[str, Any] | str]:
+        try:
+            if isinstance(addresses, str):
+                address_list = [a.strip() for a in addresses.split(",")]
+            else:
+                address_list = [str(a).strip() for a in addresses]
+            checked = _dedupe_checksum(address_list)
+            if not checked:
+                return False, "at least one token address is required"
+            payload = await self._euler_v3_get(
+                "/prices",
+                params={
+                    "chainId": int(chain_id),
+                    "addresses": ",".join(checked),
+                },
+            )
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint="/prices",
+                payload=payload,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_labelled_vaults(
+        self,
+        *,
+        chain_id: int,
+        include_products: bool = True,
+        include_earn: bool = True,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        try:
+            products: dict[str, Any] = {}
+            earn_raw: list[Any] = []
+            evk_vaults: list[Any] = []
+
+            if include_products:
+                products_payload = await self._euler_labels_get(
+                    chain_id=int(chain_id), file_name="products.json"
+                )
+                if isinstance(products_payload, dict):
+                    products = products_payload
+                    for product in products.values():
+                        if isinstance(product, dict):
+                            evk_vaults.extend(product.get("vaults") or [])
+
+            if include_earn:
+                earn_payload = await self._euler_labels_get(
+                    chain_id=int(chain_id), file_name="earn-vaults.json"
+                )
+                if isinstance(earn_payload, list):
+                    earn_raw = earn_payload
+
+            return True, {
+                "source": "euler_labels",
+                "chain_id": int(chain_id),
+                "evk_vaults": _dedupe_checksum(evk_vaults),
+                "earn_vaults": _dedupe_checksum(earn_raw),
+                "products": products,
+                "product_count": len(products),
+            }
+        except Exception as exc:
+            return False, str(exc)
 
     async def _encode_data(
         self,
@@ -241,11 +524,17 @@ class EulerV2Adapter(BaseAdapter):
                                         init_liq = int(
                                             row.get("initialLiquidationLTV") or 0
                                         )
+                                        target_ts = int(row.get("targetTimestamp") or 0)
+                                        ramp_duration = int(
+                                            row.get("rampDuration") or 0
+                                        )
                                     else:
                                         collateral = to_checksum_address(str(row[0]))
                                         borrow_ltv = int(row[1] or 0)
                                         liq_ltv = int(row[2] or 0)
                                         init_liq = int(row[3] or 0)
+                                        target_ts = int(row[4] or 0)
+                                        ramp_duration = int(row[5] or 0)
                                 except Exception:
                                     continue
 
@@ -257,6 +546,8 @@ class EulerV2Adapter(BaseAdapter):
                                         "borrow_ltv": borrow_ltv,
                                         "liquidation_ltv": liq_ltv,
                                         "initial_liquidation_ltv": init_liq,
+                                        "target_timestamp": target_ts,
+                                        "ramp_duration": ramp_duration,
                                     }
                                 )
 

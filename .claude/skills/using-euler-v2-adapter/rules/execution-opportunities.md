@@ -1,5 +1,11 @@
 # Euler v2 execution (deposit/withdraw/borrow/repay via EVC batch)
 
+The adapter only implements EVK vault lend/borrow flows. It does **not** build
+EulerSwap, multiply, or Order Flow Router payloads. The registry exposes
+`swapper` and `swap_verifier` addresses for discovery and review, but do not
+manually compose swap batches unless a separate quote/payload integration has
+been added and tested.
+
 ## Safety
 
 - Prefer running the existing fork simulation first:
@@ -94,3 +100,14 @@ ok, tx = await adapter.unlend(chain_id=CHAIN_ID_BASE, vault=COLLATERAL_VAULT, am
 | `set_collateral(chain_id, vault, use_as_collateral?, account?)` | Enable/disable collateral | Uses EVC `enableCollateral/disableCollateral` |
 | `borrow(chain_id, vault, amount, receiver?, collateral_vaults?, enable_controller?)` | Borrow underlying from a vault | Can batch-enable collateral + controller before borrow |
 | `repay(chain_id, vault, amount, receiver?, repay_full?)` | Repay borrow | May send an ERC20 approval tx first; `repay_full=True` uses `MAX_UINT256` semantics |
+
+## Current non-goals
+
+- EulerEarn deposits/withdrawals are not implemented as adapter write methods.
+  Treat Earn vaults as read/discovery data unless a dedicated, tested flow is
+  added.
+- EulerSwap and swap-to-repay flows require Order Flow Router payloads and a
+  trusted `SwapVerifier` step. Do not emulate them with arbitrary calldata.
+- EVC permits, operators, lockdown, and permit-disabled mode are not exposed by
+  this adapter. These are security-sensitive controls and need separate product
+  approval UX before being automated.
