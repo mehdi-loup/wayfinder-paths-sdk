@@ -843,6 +843,43 @@ async def _reject_unsafe_perp_order(
     return None
 
 
+async def _reject_if_no_market_collateral(
+    *,
+    adapter: HyperliquidAdapter,
+    sender: str,
+    asset_name: str,
+    market_type: str,
+) -> dict[str, Any] | None:
+    if market_type == MARKET_TYPE_SPOT:
+        return None
+    if market_type == MARKET_TYPE_HIP4:
+        spot_ok, spot = await adapter.get_spot_user_state(sender)
+        if not spot_ok:
+            return None
+        has_funds = any(
+            b["coin"] == "USDH" and float(b["total"]) > 0 for b in spot["balances"]
+        )
+        coin = "USDH"
+    else:
+        dex = asset_name.split(":", 1)[0] if market_type == MARKET_TYPE_HIP3 else ""
+        state_ok, state = await adapter.get_clearinghouse_state_for_dex(sender, dex)
+        if not state_ok:
+            return None
+        has_funds = float(state["marginSummary"]["accountValue"]) > 0
+        coin = (await adapter.get_dex_collateral_mapping())[dex]
+    if has_funds:
+        return None
+    return err(
+        "insufficient_collateral",
+        f"You have 0 collateral for this market, you need {coin} to collateralize this position.",
+        details={
+            "asset_name": asset_name,
+            "market_type": market_type,
+            "collateral_coin": coin,
+        },
+    )
+
+
 def _extract_filled_notional_usd(result: dict[str, Any]) -> float | None:
     statuses = (
         result.get("response", {}).get("data", {}).get("statuses", [])
@@ -987,18 +1024,15 @@ async def _place_outcome_order(
         cloid=cloid,
         address=sender,
     )
-    # Outcome orders settle in USDH. When the wallet lacks USDH, HL just says
-    # "Insufficient spot balance asset=N" — append a funding hint so agents
-    # know how to recover. Only the inner-status-error shape carries this
-    # message; outer-status errors (res["status"]=="err") use a different
-    # response schema and are skipped here.
-    if not ok_order and res["status"] == "ok":
-        for s in res["response"]["data"]["statuses"]:
-            if "error" in s and "Insufficient spot balance" in s["error"]:
-                s["error"] += (
-                    " — Outcome markets are purchased using USDH, please "
-                    "swap into sufficient USDH using the USDH/USDC spot pair."
-                )
+    if not ok_order:
+        no_collateral = await _reject_if_no_market_collateral(
+            adapter=adapter,
+            sender=sender,
+            asset_name=asset_name,
+            market_type=MARKET_TYPE_HIP4,
+        )
+        if no_collateral is not None:
+            return no_collateral
     effects.append(
         {"type": "hl", "label": "place_outcome_order", "ok": ok_order, "result": res}
     )
@@ -1583,6 +1617,15 @@ async def hyperliquid_place_market_order(
         cloid=cloid,
         builder=DEFAULT_HYPERLIQUID_BUILDER_FEE,
     )
+    if not ok_order:
+        no_collateral = await _reject_if_no_market_collateral(
+            adapter=adapter,
+            sender=sender,
+            asset_name=asset_name,
+            market_type=market_type,
+        )
+        if no_collateral is not None:
+            return no_collateral
     effects.append(
         {"type": "hl", "label": "place_market_order", "ok": ok_order, "result": res}
     )
@@ -1738,6 +1781,15 @@ async def hyperliquid_place_limit_order(
         cloid=cloid,
         builder=DEFAULT_HYPERLIQUID_BUILDER_FEE,
     )
+    if not ok_order:
+        no_collateral = await _reject_if_no_market_collateral(
+            adapter=adapter,
+            sender=sender,
+            asset_name=asset_name,
+            market_type=market_type,
+        )
+        if no_collateral is not None:
+            return no_collateral
     effects.append(
         {"type": "hl", "label": "place_limit_order", "ok": ok_order, "result": res}
     )

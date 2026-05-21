@@ -503,6 +503,43 @@ class HyperliquidAdapter(BaseAdapter):
                     "activeAssetData is only available for perp and HIP-3 markets"
                 )
 
+    async def get_clearinghouse_state_for_dex(
+        self, address: str, dex: str
+    ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
+        """Single-dex `clearinghouseState`. Use `dex=""` for core perps, `dex="<name>"` for HIP-3."""
+        try:
+            data = await asyncio.to_thread(
+                get_info().post,
+                "/info",
+                {"type": "clearinghouseState", "user": address, "dex": dex},
+            )
+            return True, data
+        except Exception as exc:
+            self.logger.error(f"Failed to fetch clearinghouseState dex={dex!r}: {exc}")
+            return False, str(exc)
+
+    async def get_dex_collateral_mapping(self) -> dict[str, str]:
+        """`{dex_name: collateral_token_symbol}` indexed off `allPerpMetas.collateralToken`
+        and `spotMeta.tokens`. Core perp dex is the empty-string key."""
+        cache_key = "hl_dex_collateral_mapping"
+        cached = await self._cache.get(cache_key)
+        if cached:
+            return cached
+        metas, (spot_ok, spot_meta) = await asyncio.gather(
+            asyncio.to_thread(get_info().post, "/info", {"type": "allPerpMetas"}),
+            self.get_spot_meta(),
+        )
+        if not spot_ok:
+            raise ValueError(f"Failed to fetch spot_meta: {spot_meta}")
+        token_names = {int(t["index"]): t["name"] for t in spot_meta["tokens"]}
+        dexes = get_perp_dexes()
+        mapping = {
+            dexes[i]: token_names[int(meta["collateralToken"])]
+            for i, meta in enumerate(metas)
+        }
+        await self._cache.set(cache_key, mapping, ttl=3600)
+        return mapping
+
     async def get_active_asset_data(
         self, address: str, asset_name: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:

@@ -5,11 +5,13 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from hyperliquid.utils.types import OUTCOME_ASSET_OFFSET
 
 from wayfinder_paths.adapters.hyperliquid_adapter import HyperliquidAdapter
 from wayfinder_paths.mcp.tools.hyperliquid import (
     hyperliquid_get_state,
     hyperliquid_get_trade_asset,
+    hyperliquid_place_limit_order,
     hyperliquid_place_market_order,
     hyperliquid_withdraw,
 )
@@ -32,6 +34,9 @@ class _StubAdapter(HyperliquidAdapter):
         return True, self._spot_assets
 
 
+_FAKE_ASSET_IDS = {"BTC-USDC": 0, "xyz:SP500": 110000}
+
+
 class _FakeExecutionAdapter:
     def __init__(
         self,
@@ -40,6 +45,9 @@ class _FakeExecutionAdapter:
         active_asset_data: dict[str, Any] | None = None,
         filled_size: str = "2.09",
         fill_price: str = "100",
+        clearinghouse_state: dict[str, Any] | None = None,
+        spot_state: dict[str, Any] | None = None,
+        place_order_succeeds: bool = True,
     ) -> None:
         self.user_state = user_state or {
             "assetPositions": [],
@@ -107,26 +115,10 @@ class _FakeExecutionAdapter:
         }
         self.filled_size = filled_size
         self.fill_price = fill_price
-
-    def get_market_type(self, asset_name: str) -> str:
-        return HyperliquidAdapter.get_market_type(asset_name)
-
-    def active_asset_data_coin(self, asset_name: str) -> str:
-        return HyperliquidAdapter.active_asset_data_coin(asset_name)
-
-    def get_mid_price_key(self, asset_name: str, asset_id: int) -> list[str]:
-        return HyperliquidAdapter.get_mid_price_key(asset_name, asset_id)
-
-    async def get_asset_id(self, asset_name: str) -> int | None:
-        if asset_name == "BTC-USDC":
-            return 0
-        return None
-
-    async def get_user_state(self, _address: str):
-        return True, self.user_state
-
-    async def get_spot_user_state(self, _address: str):
-        return True, {
+        self.clearinghouse_state = clearinghouse_state or {
+            "marginSummary": {"accountValue": "1000.0"},
+        }
+        self.spot_state = spot_state or {
             "balances": [
                 {
                     "coin": "USDC",
@@ -145,9 +137,36 @@ class _FakeExecutionAdapter:
             ],
             "tokenToAvailableAfterMaintenance": [[0, "19.94"]],
         }
+        self.place_order_succeeds = place_order_succeeds
+
+    def get_market_type(self, asset_name: str) -> str:
+        return HyperliquidAdapter.get_market_type(asset_name)
+
+    def active_asset_data_coin(self, asset_name: str) -> str:
+        return HyperliquidAdapter.active_asset_data_coin(asset_name)
+
+    def get_mid_price_key(self, asset_name: str, asset_id: int) -> list[str]:
+        return HyperliquidAdapter.get_mid_price_key(asset_name, asset_id)
+
+    async def get_asset_id(self, asset_name: str) -> int | None:
+        if asset_name.startswith("#") and asset_name[1:].isdigit():
+            return OUTCOME_ASSET_OFFSET + int(asset_name[1:])
+        return _FAKE_ASSET_IDS.get(asset_name)
+
+    async def get_user_state(self, _address: str):
+        return True, self.user_state
+
+    async def get_spot_user_state(self, _address: str):
+        return True, self.spot_state
 
     async def get_user_abstraction(self, _address: str):
         return True, "unifiedAccount"
+
+    async def get_clearinghouse_state_for_dex(self, _address: str, _dex: str):
+        return True, self.clearinghouse_state
+
+    async def get_dex_collateral_mapping(self) -> dict[str, str]:
+        return {"": "USDC", "xyz": "USDC"}
 
     async def get_active_asset_data(self, _address: str, _asset_name: str):
         return True, self.active_asset_data
@@ -173,10 +192,15 @@ class _FakeExecutionAdapter:
     def get_valid_order_size(self, _asset_id: int, size: float) -> float:
         return float(size)
 
+    def get_valid_order_price(self, _asset_id: int, price: float) -> float:
+        return float(price)
+
     def get_sz_decimals(self, _asset_id: int) -> int:
         return 4
 
     async def place_market_order(self, *_args, **_kwargs):
+        if not self.place_order_succeeds:
+            return False, {"status": "err", "response": "Insufficient balance"}
         return True, {
             "status": "ok",
             "response": {
@@ -192,6 +216,16 @@ class _FakeExecutionAdapter:
                 }
             },
         }
+
+    async def place_limit_order(self, *_args, **_kwargs):
+        if not self.place_order_succeeds:
+            return False, {"status": "err", "response": "Insufficient balance"}
+        return True, {"status": "ok"}
+
+    async def place_outcome_order(self, **_kwargs):
+        if not self.place_order_succeeds:
+            return False, {"status": "err", "response": "Insufficient spot balance"}
+        return True, {"status": "ok"}
 
 
 @pytest.mark.asyncio
@@ -523,6 +557,103 @@ async def test_hyperliquid_market_order_requires_reduce_only_for_opposite_positi
 
     assert out["ok"] is False
     assert out["error"]["code"] == "reduce_only_required"
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_market_order_rejects_when_core_perp_has_zero_usdc():
+    fake = _FakeExecutionAdapter(
+        clearinghouse_state={"marginSummary": {"accountValue": "0.0"}},
+        active_asset_data={
+            "availableToTrade": ["10000", "10000"],
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "100",
+            "maxTradeSzs": ["1000", "1000"],
+        },
+        place_order_succeeds=False,
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_market_order(
+            wallet_label="main",
+            asset_name="BTC-USDC",
+            is_buy=True,
+            usd_amount=20,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "insufficient_collateral"
+    assert "USDC" in out["error"]["message"]
+    assert out["error"]["details"]["collateral_coin"] == "USDC"
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_limit_order_rejects_when_hip3_dex_has_zero_collateral():
+    fake = _FakeExecutionAdapter(
+        clearinghouse_state={"marginSummary": {"accountValue": "0.0"}},
+        active_asset_data={
+            "availableToTrade": ["10000", "10000"],
+            "leverage": {"type": "cross", "value": 5},
+            "markPx": "5000",
+            "maxTradeSzs": ["1000", "1000"],
+        },
+        place_order_succeeds=False,
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_limit_order(
+            wallet_label="main",
+            asset_name="xyz:SP500",
+            is_buy=True,
+            price=5000.0,
+            usd_amount=100,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "insufficient_collateral"
+    assert "USDC" in out["error"]["message"]
+    assert out["error"]["details"] == {
+        "asset_name": "xyz:SP500",
+        "market_type": "hip3",
+        "collateral_coin": "USDC",
+    }
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_market_order_rejects_outcome_when_no_usdh():
+    fake = _FakeExecutionAdapter(
+        spot_state={"balances": []},
+        place_order_succeeds=False,
+    )
+
+    with (
+        patch(
+            "wayfinder_paths.mcp.tools.hyperliquid._make_hl_adapter",
+            new=AsyncMock(return_value=(fake, "0x1234")),
+        ),
+        patch("wayfinder_paths.mcp.tools.hyperliquid._annotate_hl_profile"),
+    ):
+        out = await hyperliquid_place_market_order(
+            wallet_label="main",
+            asset_name="#40",
+            is_buy=True,
+            size=1,
+        )
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "insufficient_collateral"
+    assert "USDH" in out["error"]["message"]
 
 
 @pytest.mark.asyncio
