@@ -1,0 +1,12 @@
+schema_version: "0.1"
+entrypoint: "adapters.derive_adapter.adapter.DeriveAdapter"
+capabilities:
+  - "market.read"
+  - "market.meta"
+  - "market.orderbook"
+  - "market.quote"
+  - "position.read"
+  - "margin.read"
+  - "order.execute"
+  - "order.cancel"
+dependencies: []

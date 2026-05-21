@@ -1,0 +1,34 @@
+{
+  "list_eth_options": {
+    "method": "list_options",
+    "kwargs": {
+      "currency": "ETH",
+      "expired": false
+    }
+  },
+  "get_eth_option_tickers": {
+    "method": "get_option_tickers",
+    "kwargs": {
+      "currency": "ETH",
+      "expiry_date": "20260522"
+    }
+  },
+  "signed_order_dry_run": {
+    "method": "submit_order",
+    "kwargs": {
+      "dry_run": true,
+      "order": {
+        "subaccount_id": 12345,
+        "instrument_name": "ETH-20260522-2500-C",
+        "direction": "buy",
+        "amount": "0.1",
+        "limit_price": "20",
+        "max_fee": "2",
+        "nonce": 1779327000000001,
+        "signature_expiry_sec": 1779327600,
+        "signer": "0x0000000000000000000000000000000000000000",
+        "signature": "0x..."
+      }
+    }
+  }
+}
