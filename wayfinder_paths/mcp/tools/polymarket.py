@@ -494,7 +494,7 @@ async def polymarket_read(
 
 
 @catch_errors
-async def polymarket_deposit(
+async def polymarket_deposit_pusd(
     *,
     wallet_label: str,
     amount: float,
@@ -523,7 +523,7 @@ async def polymarket_deposit(
             return err(
                 "insufficient_pusd",
                 f"Owner EOA has {pusd_balance / 1_000_000:.6f} pUSD, need "
-                f"{amt:.6f}. polymarket_deposit only transfers pUSD on Polygon "
+                f"{amt:.6f}. polymarket_deposit_pusd only transfers pUSD on Polygon "
                 "— wrap USDC.e / native USDC to pUSD first.",
                 {
                     "owner": sender,
@@ -563,7 +563,7 @@ async def polymarket_deposit(
 
 
 @catch_errors
-async def polymarket_withdraw(
+async def polymarket_withdraw_pusd(
     *,
     wallet_label: str,
     amount: float | None = None,
