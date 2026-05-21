@@ -123,6 +123,13 @@ async def test_qn_max_builder_fee(client: HyperliquidInfoClient) -> None:
     assert r >= 0
 
 
+@needs_api_key
+@pytest.mark.asyncio
+async def test_qn_frontend_open_orders(client: HyperliquidInfoClient) -> None:
+    r = await client.post({"type": "frontendOpenOrders", "user": TEST_USER})
+    assert isinstance(r, list)
+
+
 # ── Public-direct path (SDK Info → api.hyperliquid.xyz) ──────────────────
 
 
@@ -216,3 +223,44 @@ async def test_public_user_fills_by_time(client: HyperliquidInfoClient) -> None:
         }
     )
     assert isinstance(r, list)
+
+
+# Adapter-call-site coverage — public-only HL types the adapter hits today.
+
+
+@pytest.mark.asyncio
+async def test_public_all_perp_metas(client: HyperliquidInfoClient) -> None:
+    r = await client.post({"type": "allPerpMetas"})
+    assert isinstance(r, list)
+    assert len(r) >= 1
+    assert "universe" in r[0]
+
+
+@pytest.mark.asyncio
+async def test_public_active_asset_data(client: HyperliquidInfoClient) -> None:
+    r = await client.post({"type": "activeAssetData", "user": TEST_USER, "coin": "BTC"})
+    assert isinstance(r, dict)
+    assert "leverage" in r or "markPx" in r
+
+
+@pytest.mark.asyncio
+async def test_public_user_abstraction(client: HyperliquidInfoClient) -> None:
+    r = await client.post({"type": "userAbstraction", "user": TEST_USER})
+    assert r in {"default", "unifiedAccount", "portfolioMargin", "dexAbstraction"}
+
+
+@pytest.mark.asyncio
+async def test_public_margin_table(client: HyperliquidInfoClient) -> None:
+    # HL margin table 1 is the default cross-margin schedule — always present.
+    r = await client.post({"type": "marginTable", "id": 1})
+    assert isinstance(r, dict)
+    assert "marginTiers" in r or "description" in r
+
+
+@pytest.mark.asyncio
+async def test_public_vault_details(client: HyperliquidInfoClient) -> None:
+    HLP_VAULT = "0xdfc24b077bc1425ad1dea75bcb6f8158e10df303"
+    r = await client.post({"type": "vaultDetails", "vaultAddress": HLP_VAULT})
+    assert isinstance(r, dict)
+    assert r["vaultAddress"].lower() == HLP_VAULT
+    assert "portfolio" in r
