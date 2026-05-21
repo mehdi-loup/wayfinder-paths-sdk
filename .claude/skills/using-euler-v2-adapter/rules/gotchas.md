@@ -33,8 +33,24 @@ Euler V3 API preview methods return:
 - Raw on-chain amounts as strings
 - USD values as numbers
 
+The adapter mirrors normalized fields for strategy code:
+- `supply_apy_decimal`, `borrow_apy_decimal`, `apy_30d_decimal`, etc. are
+  decimal fractions converted from the API percent fields.
+- `total_assets_raw`, `total_borrows_raw`, and related `*_raw` fields are exact
+  Python int mirrors of bigint-string API fields.
+- `raw` keeps the original API envelope for debugging and schema drift checks.
+
 Lens-backed `get_all_markets(...)` returns supply/borrow APYs as decimal
 fractions (`0.0525` means 5.25%) and caps/totals as ints.
+
+## V3 API is indexed data, not transaction construction
+
+`get_indexed_vaults(...)`, `get_indexed_vault(...)`,
+`get_indexed_vault_collaterals(...)`, `get_indexed_vault_totals(...)`,
+`get_euler_earn_vaults(...)`, `get_euler_earn_vault(...)`,
+`resolve_vault(...)`, and `get_offchain_prices(...)` use Euler's indexed HTTP
+API. Use these for discovery, monitoring, and analytics. Use lens/contract reads
+when execution needs current on-chain state.
 
 ## Units are raw ints
 
@@ -91,6 +107,12 @@ vaults, use `get_labelled_vaults(...)`.
 The contract map includes current EulerSwap/Swapper/SwapVerifier addresses, but
 the adapter does not construct Order Flow Router quotes or swap verification
 calldata. Do not use these addresses to hand-roll swap or multiply batches.
+
+## EulerEarn execution is not claimed here
+
+EulerEarn vaults are ERC-4626 vaults, but this adapter only exposes Earn
+indexed/label discovery. Do not call EVK `lend`/`unlend` methods with Earn vault
+addresses; they are meant for EVK/eVault lending markets.
 
 ## MCP `get_adapter(..., wallet_label=...)` doesn’t auto-wire this adapter
 

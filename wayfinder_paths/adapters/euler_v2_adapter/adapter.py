@@ -35,6 +35,27 @@ EULER_V3_API_BASE_URL = "https://v3.euler.finance/v3"
 EULER_LABELS_BASE_URL = (
     "https://raw.githubusercontent.com/euler-xyz/euler-labels/master"
 )
+EULER_V3_MAX_LIMIT = 100
+EULER_V3_RAW_AMOUNT_FIELDS = {
+    "totalAssets": "total_assets_raw",
+    "totalBorrows": "total_borrows_raw",
+    "totalBorrowed": "total_borrowed_raw",
+    "totalCash": "total_cash_raw",
+    "totalShares": "total_shares_raw",
+    "totalSupply": "total_supply_raw",
+    "availableAssets": "available_assets_raw",
+    "cash": "cash_raw",
+    "supplyCap": "supply_cap_raw",
+    "borrowCap": "borrow_cap_raw",
+}
+EULER_V3_APY_PERCENT_FIELDS = {
+    "supplyApy": "supply_apy_decimal",
+    "borrowApy": "borrow_apy_decimal",
+    "apyCurrent": "apy_current_decimal",
+    "apy7d": "apy_7d_decimal",
+    "apy30d": "apy_30d_decimal",
+    "apy90d": "apy_90d_decimal",
+}
 
 
 def _tuple_to_dict(value: Any, keys: list[str]) -> dict[str, Any]:
@@ -61,6 +82,13 @@ def _clean_params(params: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in params.items() if v is not None}
 
 
+def _v3_page_params(*, limit: int, offset: int) -> dict[str, int]:
+    return {
+        "limit": min(EULER_V3_MAX_LIMIT, max(1, int(limit))),
+        "offset": max(0, int(offset)),
+    }
+
+
 def _csv(value: str | list[str] | tuple[str, ...] | None) -> str | None:
     if value is None:
         return None
@@ -82,18 +110,179 @@ def _dedupe_checksum(addresses: list[Any]) -> list[str]:
     return out
 
 
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_token(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    if out.get("address"):
+        out["address"] = to_checksum_address(str(out["address"]))
+    if out.get("decimals") is not None:
+        decimals = _int_or_none(out.get("decimals"))
+        if decimals is not None:
+            out["decimals"] = decimals
+    return out
+
+
+def _apply_v3_unit_fields(out: dict[str, Any]) -> None:
+    for field, normalized_field in EULER_V3_RAW_AMOUNT_FIELDS.items():
+        raw_value = _int_or_none(out.get(field))
+        if raw_value is not None:
+            out[normalized_field] = raw_value
+
+    for field, normalized_field in EULER_V3_APY_PERCENT_FIELDS.items():
+        apy = _float_or_none(out.get(field))
+        if apy is not None:
+            out[normalized_field] = apy / 100
+
+
+def _normalize_v3_vault(value: Any, *, default_vault_type: str | None = None) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    if out.get("address"):
+        out["address"] = to_checksum_address(str(out["address"]))
+    if out.get("dToken"):
+        out["dToken"] = to_checksum_address(str(out["dToken"]))
+    if out.get("chainId") is not None:
+        chain_id = _int_or_none(out.get("chainId"))
+        if chain_id is not None:
+            out["chain_id"] = chain_id
+
+    vault_type = str(out.get("vaultType") or default_vault_type or "").strip()
+    if vault_type:
+        out["vault_type"] = vault_type
+
+    if "asset" in out:
+        asset = _normalize_token(out.get("asset"))
+        out["asset"] = asset
+        if isinstance(asset, dict) and asset.get("address"):
+            out["underlying"] = asset["address"]
+
+    if "shares" in out:
+        shares = _normalize_token(out.get("shares"))
+        if isinstance(shares, dict):
+            out["shares"] = shares
+
+    _apply_v3_unit_fields(out)
+    return out
+
+
+def _normalize_v3_price(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    if out.get("address"):
+        out["address"] = to_checksum_address(str(out["address"]))
+    if out.get("chainId") is not None:
+        chain_id = _int_or_none(out.get("chainId"))
+        if chain_id is not None:
+            out["chain_id"] = chain_id
+    price = _float_or_none(out.get("priceUsd"))
+    if price is not None:
+        out["price_usd"] = price
+    return out
+
+
+def _normalize_v3_collateral(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    for field in ("collateral", "asset"):
+        if out.get(field):
+            out[field] = to_checksum_address(str(out[field]))
+    for field in (
+        "borrowLTV",
+        "liquidationLTV",
+        "initialLiquidationLTV",
+        "rampDuration",
+    ):
+        normalized = _int_or_none(out.get(field))
+        if normalized is not None:
+            out[field] = normalized
+    return out
+
+
+def _normalize_v3_totals(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    current = out.get("current")
+    if isinstance(current, dict):
+        current = dict(current)
+        _apply_v3_unit_fields(current)
+        out["current"] = current
+
+    history = out.get("history")
+    if isinstance(history, list):
+        normalized_history = []
+        for item in history:
+            if isinstance(item, dict):
+                item = dict(item)
+                _apply_v3_unit_fields(item)
+            normalized_history.append(item)
+        out["history"] = normalized_history
+
+    _apply_v3_unit_fields(out)
+    return out
+
+
+def _normalize_envelope_data(data: Any, normalizer: Any | None) -> Any:
+    if normalizer is None:
+        return data
+    if isinstance(data, list):
+        return [normalizer(item) for item in data]
+    if isinstance(data, dict):
+        return normalizer(data)
+    return data
+
+
+def _euler_error_message(status_code: int, payload: Any) -> str:
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        error = payload["error"]
+        code = str(error.get("code") or "HTTP_ERROR")
+        message = str(error.get("message") or f"HTTP {status_code}")
+        request_id = error.get("requestId")
+        suffix = f" request_id={request_id}" if request_id else ""
+        return f"Euler endpoint error {code}: {message}{suffix}"
+    return f"Euler endpoint error HTTP_{status_code}"
+
+
 def _api_envelope(
     *,
     source: str,
     endpoint: str,
     payload: dict[str, Any],
+    normalizer: Any | None = None,
 ) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) else None
     meta = payload.get("meta") if isinstance(payload, dict) else None
     return {
         "source": source,
         "endpoint": endpoint,
-        "data": data,
+        "data": _normalize_envelope_data(data, normalizer),
         "meta": meta or {},
         "raw": payload,
     }
@@ -167,10 +356,21 @@ class EulerV2Adapter(BaseAdapter):
             headers=merged_headers,
         ) as client:
             response = await client.get(url, params=params or {})
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_payload = response.json()
+                except ValueError:
+                    error_payload = {}
+                raise ValueError(
+                    _euler_error_message(response.status_code, error_payload)
+                ) from exc
             payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("Euler endpoint returned a non-object JSON payload")
+        if isinstance(payload.get("error"), dict):
+            raise ValueError(_euler_error_message(response.status_code, payload))
         return payload
 
     async def _euler_v3_get(
@@ -237,8 +437,7 @@ class EulerV2Adapter(BaseAdapter):
         try:
             params = {
                 "chainId": int(chain_id),
-                "limit": int(limit),
-                "offset": int(offset),
+                **_v3_page_params(limit=limit, offset=offset),
                 "fields": _csv(fields),
                 "sort": sort,
                 "asset": to_checksum_address(asset) if asset else None,
@@ -251,6 +450,76 @@ class EulerV2Adapter(BaseAdapter):
                 source="euler_v3_api",
                 endpoint="/evk/vaults",
                 payload=payload,
+                normalizer=lambda item: _normalize_v3_vault(
+                    item, default_vault_type="evk"
+                ),
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_indexed_vault(
+        self,
+        *,
+        chain_id: int,
+        vault: str,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read one indexed EVK vault detail from Euler's V3 API preview."""
+        try:
+            vault_addr = to_checksum_address(vault)
+            endpoint = f"/evk/vaults/{int(chain_id)}/{vault_addr}"
+            payload = await self._euler_v3_get(endpoint)
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint=endpoint,
+                payload=payload,
+                normalizer=lambda item: _normalize_v3_vault(
+                    item, default_vault_type="evk"
+                ),
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_indexed_vault_collaterals(
+        self,
+        *,
+        chain_id: int,
+        vault: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read indexed collateral LTV rows for one EVK vault from Euler's V3 API."""
+        try:
+            vault_addr = to_checksum_address(vault)
+            endpoint = f"/evk/vaults/{int(chain_id)}/{vault_addr}/collaterals"
+            payload = await self._euler_v3_get(
+                endpoint,
+                params=_v3_page_params(limit=limit, offset=offset),
+            )
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint=endpoint,
+                payload=payload,
+                normalizer=_normalize_v3_collateral,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_indexed_vault_totals(
+        self,
+        *,
+        chain_id: int,
+        vault: str,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read indexed current and historical totals for one EVK vault."""
+        try:
+            vault_addr = to_checksum_address(vault)
+            endpoint = f"/evk/vaults/{int(chain_id)}/{vault_addr}/totals"
+            payload = await self._euler_v3_get(endpoint)
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint=endpoint,
+                payload=payload,
+                normalizer=_normalize_v3_totals,
             )
         except Exception as exc:
             return False, str(exc)
@@ -268,14 +537,38 @@ class EulerV2Adapter(BaseAdapter):
                 "/earn/vaults",
                 params={
                     "chainId": int(chain_id),
-                    "limit": int(limit),
-                    "offset": int(offset),
+                    **_v3_page_params(limit=limit, offset=offset),
                 },
             )
             return True, _api_envelope(
                 source="euler_v3_api",
                 endpoint="/earn/vaults",
                 payload=payload,
+                normalizer=lambda item: _normalize_v3_vault(
+                    item, default_vault_type="earn"
+                ),
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    async def get_euler_earn_vault(
+        self,
+        *,
+        chain_id: int,
+        vault: str,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        """Read one indexed EulerEarn vault detail from Euler's V3 API preview."""
+        try:
+            vault_addr = to_checksum_address(vault)
+            endpoint = f"/earn/vaults/{int(chain_id)}/{vault_addr}"
+            payload = await self._euler_v3_get(endpoint)
+            return True, _api_envelope(
+                source="euler_v3_api",
+                endpoint=endpoint,
+                payload=payload,
+                normalizer=lambda item: _normalize_v3_vault(
+                    item, default_vault_type="earn"
+                ),
             )
         except Exception as exc:
             return False, str(exc)
@@ -298,6 +591,7 @@ class EulerV2Adapter(BaseAdapter):
                 source="euler_v3_api",
                 endpoint="/resolve/vaults",
                 payload=payload,
+                normalizer=lambda item: _normalize_v3_vault(item),
             )
         except Exception as exc:
             return False, str(exc)
@@ -327,6 +621,7 @@ class EulerV2Adapter(BaseAdapter):
                 source="euler_v3_api",
                 endpoint="/prices",
                 payload=payload,
+                normalizer=_normalize_v3_price,
             )
         except Exception as exc:
             return False, str(exc)

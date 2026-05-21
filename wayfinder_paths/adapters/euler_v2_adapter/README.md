@@ -22,3 +22,23 @@
   returns APYs as decimal fractions.
 - EulerSwap/order-flow execution is not implemented here. The registry exposes
   Swapper and SwapVerifier addresses for discovery and safety review only.
+
+## Supported Surface
+
+| Surface | Adapter support | Notes |
+|---------|-----------------|-------|
+| EVK / eVault on-chain reads | Supported | `get_verified_vaults`, `get_vault_info_full`, `get_all_markets`, `get_full_user_state` read current contract/lens state. |
+| EVK / EVC fund-moving flows | Supported | `lend`, `unlend`, `set_collateral`, `remove_collateral`, `borrow`, and `repay` execute EVC batches and require a strategy wallet signing callback. |
+| Euler V3 API preview | Read-only | `get_indexed_vaults`, `get_indexed_vault`, `get_indexed_vault_collaterals`, `get_indexed_vault_totals`, `resolve_vault`, and `get_offchain_prices` use indexed HTTP data. These calls are not transaction builders. |
+| EulerEarn | Read-only discovery | `get_euler_earn_vaults`, `get_euler_earn_vault`, and `get_labelled_vaults` expose indexed/label data. Earn deposit and withdraw methods are not implemented in this adapter. |
+| EulerSwap / Order Flow Router | Discovery only | Contract addresses are exposed through `get_protocol_contracts`; swap payload construction and execution are intentionally out of scope until quote, route, slippage, and `SwapVerifier` policy integration exists. |
+
+V3 API payloads are normalized at the SDK boundary:
+
+- EVM addresses are checksummed.
+- Raw bigint-style amounts remain in the original camelCase fields and are also
+  mirrored as Python ints in `*_raw` fields where the API returns integer
+  strings.
+- V3 APY percent fields remain in the original camelCase fields and are also
+  mirrored as decimal fractions in `*_decimal` fields.
+- The original API envelope is preserved under `raw`.

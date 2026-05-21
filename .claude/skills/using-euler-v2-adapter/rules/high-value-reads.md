@@ -29,8 +29,8 @@ Terminology:
 
 - For current curated EVK/Earn discovery, prefer
   `get_labelled_vaults(chain_id=...)`.
-- For indexed summaries, history-friendly data, prices, or Earn summaries, use
-  the Euler V3 API preview methods.
+- For indexed summaries, vault details, collateral rows, totals/history, prices,
+  or Earn summaries, use the Euler V3 API preview methods.
 - For exact current on-chain EVK state, use lens-backed methods:
   `get_vault_info_full(...)`, `get_all_markets(...)`, and
   `get_full_user_state(...)`.
@@ -40,8 +40,12 @@ Terminology:
   of truth.
 
 V3 API conventions:
-- Raw on-chain amounts are strings to preserve bigint precision.
-- APYs from V3 API endpoints are percent values (`5.25` means 5.25%).
+- Raw on-chain amounts are strings to preserve bigint precision. The adapter
+  preserves these original fields and mirrors integer strings to `*_raw` Python
+  int fields when it can do so exactly.
+- APYs from V3 API endpoints are percent values (`5.25` means 5.25%). The
+  adapter preserves the original percent fields and mirrors them to
+  `*_decimal` fields (`0.0525`) for consistency with strategy math.
 - Lens-backed `get_all_markets(...)` converts ray APYs to decimal fractions
   (`0.0525` means 5.25%).
 
@@ -95,6 +99,42 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### One EVK vault detail, collateral rows, and indexed totals
+
+```python
+"""Fetch indexed Euler EVK vault detail and current/historical totals."""
+import asyncio
+from wayfinder_paths.mcp.scripting import get_adapter
+from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
+from wayfinder_paths.core.constants.chains import CHAIN_ID_BASE
+
+VAULT = "0x0000000000000000000000000000000000000000"
+
+async def main():
+    adapter = await get_adapter(EulerV2Adapter)
+
+    ok, detail = await adapter.get_indexed_vault(chain_id=CHAIN_ID_BASE, vault=VAULT)
+    if not ok:
+        raise RuntimeError(detail)
+    print(detail["data"]["symbol"], detail["data"].get("supply_apy_decimal"))
+
+    ok, collaterals = await adapter.get_indexed_vault_collaterals(
+        chain_id=CHAIN_ID_BASE,
+        vault=VAULT,
+    )
+    if not ok:
+        raise RuntimeError(collaterals)
+    print("collaterals=", collaterals["data"])
+
+    ok, totals = await adapter.get_indexed_vault_totals(chain_id=CHAIN_ID_BASE, vault=VAULT)
+    if not ok:
+        raise RuntimeError(totals)
+    print("current=", totals["data"].get("current"))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
 ### Indexed EulerEarn vault summaries
 
 ```python
@@ -115,6 +155,10 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+Use `get_euler_earn_vault(chain_id=..., vault=...)` for one indexed Earn vault
+detail. This is still read-only discovery; the adapter does not expose Earn
+deposit or withdraw methods.
 
 ### Off-chain prices (Euler V3 API)
 
@@ -244,7 +288,11 @@ if __name__ == "__main__":
 |--------|---------|----------------|
 | `get_labelled_vaults(chain_id, include_products?, include_earn?)` | Current curated EVK/Earn vault addresses from Euler labels | No |
 | `get_indexed_vaults(chain_id, limit?, offset?, fields?, sort?, asset?, min_tvl?, max_tvl?, visibility?)` | Euler V3 indexed EVK vault summaries | No |
+| `get_indexed_vault(chain_id, vault)` | Euler V3 indexed EVK vault detail | No |
+| `get_indexed_vault_collaterals(chain_id, vault, limit?, offset?)` | Euler V3 indexed EVK collateral/LTV rows | No |
+| `get_indexed_vault_totals(chain_id, vault)` | Euler V3 indexed EVK current totals and history | No |
 | `get_euler_earn_vaults(chain_id, limit?, offset?)` | Euler V3 indexed EulerEarn vault summaries | No |
+| `get_euler_earn_vault(chain_id, vault)` | Euler V3 indexed EulerEarn vault detail | No |
 | `resolve_vault(chain_id, address)` | Resolve whether an address is an indexed EVK/Earn vault | No |
 | `get_offchain_prices(chain_id, addresses)` | Euler V3 token USD prices | No |
 | `get_protocol_contracts(chain_id)` | Current EVC/EVK/Earn/Swap/lens/periphery addresses | No |
