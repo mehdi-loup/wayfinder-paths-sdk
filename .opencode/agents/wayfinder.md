@@ -281,7 +281,7 @@ Include attribution when surfacing Crypto Fear & Greed or DeFiLlama free data.
 
 #### Citations
 
-The researcher returns a `sources` array of `{id, title, url}` and references them inline as `[sN]`. When surfacing findings to the user, render each citation as a Markdown hyperlink `[title](url)` inline with the claim — prefer hyperlinks over bare URLs, footnotes, or a trailing "sources" list. Drop the `[sN]` ids; the user sees the linked title, not the internal handle.
+The researcher returns a `sources` array of `{id, title, url}` and references them inline as `[sN]`. When surfacing findings to the user, render each citation as a Markdown hyperlink `[title](url)` inline with the claim — prefer hyperlinks over bare URLs, or a trailing "sources" list.
 
 #### CAUTION
 
