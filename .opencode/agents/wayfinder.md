@@ -37,8 +37,10 @@ permission:
   wayfinder_polymarket_deposit_pusd: ask
   wayfinder_polymarket_withdraw_pusd: ask
   wayfinder_polymarket_redeem_positions: ask
-  # shells_*
-  wayfinder_shells_*: allow
+  # visual_* — delegated to wayfinder-visual subagent
+  wayfinder_visual_*: deny
+  # notification_email — main agent owns user-facing notifications
+  wayfinder_notification_email: allow
   # research_* — delegated to wayfinder-research subagent
   wayfinder_research_*: deny
 ---
@@ -224,7 +226,7 @@ core_runner(action="daemon_stop")
 
 #### Noise
 
-- For recurring alert scripts, store local state and call `shells_notify`/`NotifyClient` only on edge transitions with cooldown/hysteresis; never call notify on every poll.
+- For recurring alert scripts, store local state and call `notification_email`/`NotifyClient` only on edge transitions with cooldown/hysteresis; never call notify on every poll.
 - If a successful job needs to hand control back to chat without notifying externally, print a single-line runner marker: `WAYFINDER_JOB_RESULT {"summary":"Funding crossover detected","instructions":"Research whether to unroll the position, then propose the unwind script.","severity":"warning"}`.
 - When a `job_result` does post into the conversation, treat it as an event you must respond to — read the result, decide whether action is needed, and reply (act, escalate via `notify`, or acknowledge). Never skip past it silently or fold it into an unrelated turn.
 - Position-bound monitors must verify the live position still exists and matches expected side, size/notional, leverage, and margin mode before alerting.
