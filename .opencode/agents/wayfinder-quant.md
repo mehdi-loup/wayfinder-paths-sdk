@@ -3,6 +3,7 @@ description: Hidden quant worker for backtests, Delta Lab time series, CCXT anal
 mode: subagent
 hidden: true
 steps: 10
+temperature: 0.8
 permission:
   task:
     "*": deny
