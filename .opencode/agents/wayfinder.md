@@ -1,7 +1,7 @@
 ---
 description: User-facing Wayfinder orchestrator, executor, coder, and strategy lifecycle owner.
 mode: primary
-temperature: 0.2
+temperature: 0.1
 permission:
   task:
     "*": deny
