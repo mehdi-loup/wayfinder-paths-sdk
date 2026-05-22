@@ -2,6 +2,7 @@
 description: Hidden visual worker for Shells chart context, workspace charts, overlays, and annotations.
 mode: subagent
 hidden: true
+temperature: 0.2
 permission:
   task:
     "*": deny
