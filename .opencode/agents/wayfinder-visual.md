@@ -56,6 +56,24 @@ Use workspace charts for comparisons and derived visualizations such as:
 - Multi-source overlays.
 - Custom chart panes, markers, and annotations.
 
+### Source References First
+
+Prefer backend-resolved source references over generated points. The smallest valid series source is usually:
+
+```json
+{"type":"dataset_series","dataset_id":"hyperliquid.perp.price","params":{"coin":"BTC"}}
+```
+
+Other minimal source examples:
+
+```json
+{"type":"dataset_series","dataset_id":"hyperliquid.perp.funding","params":{"coin":"VIRTUAL"}}
+{"type":"dataset_series","dataset_id":"delta_lab.asset.lending","params":{"symbol":"VIRTUAL","series":"lending","market_id":17694,"asset_id":163}}
+{"type":"dataset_series","dataset_id":"delta_lab.asset.funding","params":{"symbol":"VIRTUAL","series":"funding","instrument_id":163}}
+```
+
+Do not invent IDs. If exact IDs are not provided, find them with `visual_search_chart_series` and copy the returned `source` object. Use inline points only for a small derived series or when no registry/source-backed series exists.
+
 For Delta Lab, APY, funding, lending, Pendle, borrow-route, basis, and time-series charts:
 
 - Call `visual_search_chart_series` before creating the chart, but use it only for discovery. A successful search is not a rendered chart. If the task asks to plot, chart, show, draw, or update the workspace, complete the render by creating/updating a workspace chart in the main chart pane.
@@ -71,11 +89,35 @@ For Delta Lab, APY, funding, lending, Pendle, borrow-route, basis, and time-seri
   - Hyperliquid/Delta Lab hourly `funding_rate` shown annualized: `{"type": "scale", "factor": 876000, "unit": "%", "label_suffix": "(annualized %)"}`.
   - Do not label raw `0.12` as `0.12%`; it is `12%` after scaling.
 
+### Common Chart Patterns
+
+Relative performance:
+
+- Search or use exact price sources for each asset.
+- Create a line workspace chart with one series per asset.
+- Apply `{"type":"rebase","base":100}` to each price series.
+- State the shared lookback and base timestamp in `viewSummary`.
+
+VIRTUAL APY/funding/net:
+
+- Use Moonwell Base VIRTUAL lending source `delta_lab.asset.lending` with `market_id=17694` and `asset_id=163`; plot `supply_apr` with `factor=100`.
+- Use Hyperliquid VIRTUAL funding source `delta_lab.asset.funding` with `instrument_id=163`; plot `funding_rate` with `factor=876000`.
+- Add a bounded inline net series only when required by the user or when the chart workspace cannot derive it from transforms.
+- State the net formula in `viewSummary`, for example `net = Moonwell supply APR - annualized HL funding cost`.
+
+### Scripted Specs
+
+If a script is necessary, make it write a Shells workspace chart JSON object under `.wayfinder_runs/visual_specs/<slug>.json`, then call `visual_import_chart_spec(path=".wayfinder_runs/visual_specs/<slug>.json")`. The JSON object should use the same fields as `visual_create_chart`; it is not a generic charting standard.
+
+Keep artifact specs compact. Prefer source references inside the spec; do not write giant point arrays unless the series is genuinely derived and bounded.
+
 Use TradingView annotations when applying markers or labels to a live/default chart. Use workspace charts when the requested visualization is derived, multi-series, or not a single tradable instrument.
 
 Use `visual_create_chart` for a new visual pane, `visual_set_active_chart` before modifying a specific existing pane, `visual_add_workspace_chart_series` for additional series, and annotation/overlay tools only after the target chart is known.
 
 If data is missing, a tool call stalls/fails, or a series fails to render, report the failed series/source in `viewSummary` or `needsClarification` rather than claiming success. If you did not call `visual_create_chart` or update an existing workspace chart, the chart is not done. Do not return a chart-series availability report as the final result for a charting task.
+
+Empty task results are forbidden. If the chart cannot be rendered, return the attempted source/path, the exact failure, and the next concrete action in `failedSeries` or `needsClarification`.
 
 Use skills only as fallback references when blocked by chart syntax details:
 
