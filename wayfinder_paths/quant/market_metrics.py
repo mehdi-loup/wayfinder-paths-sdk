@@ -61,12 +61,22 @@ def beta(asset_returns: Sequence[float], benchmark_returns: Sequence[float]) -> 
 def funding_adjusted_returns(
     price_returns: Sequence[float],
     funding_rates: Sequence[float],
+    side: str = "long",
 ) -> list[float]:
+    """Return perp returns after funding. Positive funding means longs pay shorts."""
     length = min(len(price_returns), len(funding_rates))
-    return [
-        float(price_returns[index]) + float(funding_rates[index])
-        for index in range(length)
-    ]
+    normalized_side = side.lower()
+    if normalized_side == "long":
+        return [
+            float(price_returns[index]) - float(funding_rates[index])
+            for index in range(length)
+        ]
+    if normalized_side == "short":
+        return [
+            -float(price_returns[index]) + float(funding_rates[index])
+            for index in range(length)
+        ]
+    raise ValueError("side must be 'long' or 'short'")
 
 
 def turnover_cost(

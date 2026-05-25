@@ -69,7 +69,13 @@ def roi(ev: float, entry: float) -> float:
 
 
 def simple_annualized_roi(period_roi: float, days_to_resolution: float) -> float:
-    """Annualize a realized or expected period ROI over days to resolution."""
+    """Annualize a realized or expected period ROI linearly."""
+    days = _require_positive(days_to_resolution, "days_to_resolution")
+    return float(period_roi) * 365.0 / days
+
+
+def compounded_annualized_roi(period_roi: float, days_to_resolution: float) -> float:
+    """Annualize a realized or expected period ROI with compounding."""
     days = _require_positive(days_to_resolution, "days_to_resolution")
     value = float(period_roi)
     if value <= -1.0:
@@ -77,11 +83,16 @@ def simple_annualized_roi(period_roi: float, days_to_resolution: float) -> float
     return float((1.0 + value) ** (365.0 / days) - 1.0)
 
 
-def binary_kelly(p: float, entry: float) -> float:
-    """Return full Kelly fraction for a binary contract priced from 0 to 1."""
+def signed_binary_kelly(p: float, entry: float) -> float:
+    """Return signed full Kelly fraction for diagnostics."""
     probability = _clamp_probability(p)
     price = _clamp_probability(entry)
     return float((probability - price) / (1.0 - price))
+
+
+def binary_kelly(p: float, entry: float) -> float:
+    """Return non-negative full Kelly fraction for a binary contract."""
+    return max(0.0, signed_binary_kelly(p, entry))
 
 
 def implied_prior_from_quote(
@@ -133,12 +144,12 @@ def implied_prior_from_quote(
         }
 
     if last is not None:
-        prior = _clamp_probability(last)
         return {
-            "p": prior,
-            "marketPrior": prior,
-            "priorSource": "last_trade_fallback",
-            "method": "last_trade_fallback",
+            "p": None,
+            "marketPrior": None,
+            "lastTrade": _clamp_probability(last),
+            "priorSource": "last_trade_context_only",
+            "method": "last_trade_context_only",
             "spread": None,
             "quality": "very_low",
             "isExecutable": False,
@@ -354,6 +365,76 @@ def conservative_trade_gate(
         "minEv": float(min_ev),
         "passes": conservative_ev + _EPSILON >= float(min_ev),
     }
+
+
+def _choose_quote_update_decision(
+    yes_gate: Mapping[str, Any] | None,
+    no_gate: Mapping[str, Any] | None,
+) -> str:
+    passing_gates = [
+        gate for gate in (yes_gate, no_gate) if gate is not None and gate.get("passes")
+    ]
+    if not passing_gates:
+        return "WATCH"
+    best_gate = max(passing_gates, key=lambda gate: float(gate["conservativeEv"]))
+    return f"BUY_{best_gate['side']}_CANDIDATE"
+
+
+def reprice_forecast_from_quote(
+    *,
+    p_low: float,
+    p_base: float,
+    p_high: float,
+    yes_bid: float | None,
+    yes_ask: float | None,
+    no_bid: float | None = None,
+    no_ask: float | None = None,
+    min_ev: float = 0.02,
+) -> dict[str, Any]:
+    """Recompute edge for a prior forecast against a fresh executable quote."""
+    market_prior = implied_prior_from_quote(yes_bid=yes_bid, yes_ask=yes_ask)
+    entry_yes = yes_ask
+    entry_no = no_ask
+    if entry_no is None and yes_bid is not None:
+        entry_no = 1.0 - _clamp_probability(yes_bid)
+    if entry_yes is None and no_bid is not None:
+        entry_yes = 1.0 - _clamp_probability(no_bid)
+
+    yes_gate = (
+        conservative_trade_gate("YES", p_low, p_base, p_high, entry_yes, min_ev)
+        if entry_yes is not None
+        else None
+    )
+    no_gate = (
+        conservative_trade_gate("NO", p_low, p_base, p_high, entry_no, min_ev)
+        if entry_no is not None
+        else None
+    )
+
+    return {
+        "marketPrior": market_prior,
+        "entryYes": entry_yes,
+        "entryNo": entry_no,
+        "yesGate": yes_gate,
+        "noGate": no_gate,
+        "decision": _choose_quote_update_decision(yes_gate, no_gate),
+    }
+
+
+def brier_score(p: float, outcome: bool) -> float:
+    """Return Brier score for a binary forecast."""
+    forecast = _clamp_probability(p)
+    realized = 1.0 if outcome else 0.0
+    return float((forecast - realized) ** 2)
+
+
+def log_loss(p: float, outcome: bool) -> float:
+    """Return binary log loss for a forecast."""
+    forecast = _clamp_probability(p)
+    realized = 1.0 if outcome else 0.0
+    return float(
+        -(realized * math.log(forecast) + (1.0 - realized) * math.log(1.0 - forecast))
+    )
 
 
 def _level_price_size(

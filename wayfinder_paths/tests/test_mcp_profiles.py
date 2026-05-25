@@ -299,6 +299,7 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "Prediction-market research" in research
     assert "Prediction Market Forecast Mode" in research
     assert "priorSource" in research
+    assert "Last trade is context-only" in research
     assert "normalized_order_book" in research
     assert "log_odds_update" in research
     assert "log_odds_evidence_update" in research
@@ -307,6 +308,8 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "evidenceCards" in research
     assert "conservative EV" in research
     assert "quote_update" in research
+    assert "parentId" in research
+    assert "relatedLogIds" in research
     assert "Token/Perp Research Mode" in research
     assert "perpSide" in research
     assert "positionIntent" in research
@@ -327,6 +330,7 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "Market Intelligence Modes" in primary
     assert "quote/snapshot updates" in primary
     assert "audit_only" in primary
+    assert "relatedLogIds" in primary
     assert "exact tool inputs" in primary
 
     assert "Prediction Market Forecast Mode" in research
@@ -339,6 +343,7 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "Market Quant Mode" in quant
     assert "wayfinder_paths.quant.polymarket_edge" in quant
     assert "hypothesis seeds only" in quant
+    assert "positive funding means longs pay shorts" in quant
     assert "RESEARCH_ONLY" in quant
     assert "DO_NOT_TRADE" in quant
 

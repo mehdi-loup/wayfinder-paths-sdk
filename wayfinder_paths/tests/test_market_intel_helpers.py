@@ -24,12 +24,17 @@ from wayfinder_paths.quant.polymarket_edge import (
     binary_kelly,
     binary_no_ev,
     binary_yes_ev,
+    brier_score,
+    compounded_annualized_roi,
     conservative_trade_gate,
     evidence_llr,
     implied_prior_from_quote,
+    log_loss,
     normalize_binary_prices,
     posterior_band_from_evidence,
+    reprice_forecast_from_quote,
     roi,
+    signed_binary_kelly,
     simple_annualized_roi,
     sweep_asks,
 )
@@ -40,7 +45,13 @@ def test_polymarket_edge_binary_math() -> None:
     assert binary_no_ev(0.55, 0.40) == pytest.approx(0.05)
     assert roi(0.07, 0.48) == pytest.approx(0.1458333333)
     assert binary_kelly(0.55, 0.48) == pytest.approx(0.1346153846)
-    assert simple_annualized_roi(0.05, 30) == pytest.approx(0.810519, rel=1e-4)
+    assert binary_kelly(0.40, 0.48) == 0.0
+    assert signed_binary_kelly(0.40, 0.48) == pytest.approx(-0.1538461538)
+    assert simple_annualized_roi(0.05, 30) == pytest.approx(0.6083333333)
+    assert compounded_annualized_roi(0.05, 30) == pytest.approx(
+        0.810519,
+        rel=1e-4,
+    )
 
 
 def test_polymarket_edge_order_book_prior_and_log_odds_update() -> None:
@@ -70,7 +81,13 @@ def test_polymarket_quote_prior_and_evidence_cards() -> None:
 
     assert implied_prior_from_quote(None, 0.47)["priorSource"] == "ask_only"
     assert implied_prior_from_quote(0.41, None)["isExecutable"] is False
-    assert implied_prior_from_quote(None, None, last=0.44)["quality"] == "very_low"
+    last_trade_context = implied_prior_from_quote(None, None, last=0.44)
+    assert last_trade_context["quality"] == "very_low"
+    assert last_trade_context["priorSource"] == "last_trade_context_only"
+    assert last_trade_context["marketPrior"] is None
+    assert last_trade_context["p"] is None
+    assert last_trade_context["lastTrade"] == pytest.approx(0.44)
+    assert last_trade_context["isExecutable"] is False
 
     pro_card = {
         "claim": "Primary source confirms the event before resolution.",
@@ -144,15 +161,51 @@ def test_polymarket_conservative_trade_gate() -> None:
     assert no_gate["passes"] is True
     assert no_gate["conservativeEv"] == pytest.approx(0.03)
 
+    reprice = reprice_forecast_from_quote(
+        p_low=0.48,
+        p_base=0.55,
+        p_high=0.60,
+        yes_bid=0.40,
+        yes_ask=0.46,
+        min_ev=0.02,
+    )
+    assert reprice["marketPrior"]["marketPrior"] == pytest.approx(0.43)
+    assert reprice["entryYes"] == 0.46
+    assert reprice["entryNo"] == pytest.approx(0.60)
+    assert reprice["decision"] == "BUY_YES_CANDIDATE"
+
+    watch = reprice_forecast_from_quote(
+        p_low=0.47,
+        p_base=0.50,
+        p_high=0.53,
+        yes_bid=0.40,
+        yes_ask=0.49,
+        min_ev=0.02,
+    )
+    assert watch["decision"] == "WATCH"
+
+    assert brier_score(0.70, True) == pytest.approx(0.09)
+    assert log_loss(0.70, True) == pytest.approx(0.3566749439)
+
 
 def test_market_metrics_helpers() -> None:
     assert max_drawdown([100, 120, 90, 110]) == pytest.approx(-0.25)
     assert sharpe([0.01, 0.02, -0.01], periods_per_year=3) == pytest.approx(0.92582)
     assert beta([0.01, 0.02, 0.03], [0.02, 0.04, 0.06]) == pytest.approx(0.5)
     assert funding_adjusted_returns([0.01, 0.02], [-0.001, 0.002]) == [
-        pytest.approx(0.009),
-        pytest.approx(0.022),
+        pytest.approx(0.011),
+        pytest.approx(0.018),
     ]
+    assert funding_adjusted_returns(
+        [0.01, 0.02],
+        [-0.001, 0.002],
+        side="short",
+    ) == [
+        pytest.approx(-0.011),
+        pytest.approx(-0.018),
+    ]
+    with pytest.raises(ValueError, match="side must be"):
+        funding_adjusted_returns([0.01], [0.001], side="flat")
     assert turnover_cost([1.0, 0.5], fee_bps=5, slippage_bps=2) == [
         pytest.approx(0.0007),
         pytest.approx(0.00035),
@@ -180,6 +233,8 @@ def test_market_intel_log_append_search_update_and_freshness(tmp_path) -> None:
     assert entry["artifactRefs"] == []
     assert entry["sources"] == []
     assert entry["outcome"] is None
+    assert entry["parentId"] is None
+    assert entry["relatedLogIds"] == []
 
     matches = search_log(
         subject={"venue": "polymarket"},
@@ -196,6 +251,8 @@ def test_market_intel_log_append_search_update_and_freshness(tmp_path) -> None:
             "observedAt": datetime.now(UTC).isoformat(),
             "expiresAt": expires_at,
             "summary": "Quote improved; posterior unchanged.",
+            "parentId": entry["id"],
+            "relatedLogIds": [entry["id"]],
             "state": {"previousPBase": 0.49, "newEntryYes": 0.42},
             "mustRehydrate": ["order_book", "liquidity", "news"],
         },
@@ -221,4 +278,6 @@ def test_market_intel_log_append_search_update_and_freshness(tmp_path) -> None:
 
     outcome = update_outcome(entry["id"], {"realizedOutcome": "YES"}, path=log_dir)
     assert outcome["kind"] == "outcome_update"
+    assert outcome["parentId"] == entry["id"]
+    assert outcome["relatedLogIds"] == [entry["id"]]
     assert outcome["outcome"]["entryId"] == entry["id"]

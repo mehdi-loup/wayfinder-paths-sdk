@@ -184,7 +184,7 @@ When a user mentions an outcome or prediction market without naming a venue, sea
 
 For prediction-market edge or forecast requests, use fresh executable pricing as the prior before discussing a trade. Simple one-market checks can use `polymarket_read` directly; delegate to `wayfinder-research` only when the task needs multi-source evidence or resolution analysis.
 
-Before any Polymarket order, show market, outcome, side, size, current executable entry, market-implied prior, posterior range, EV, liquidity/depth, resolution ambiguity, and exact tool inputs. Never use last trade as executable entry. If the research output lacks `priorSource`, `entryYes`/`entryNo`, posterior range, or decision, rehydrate or ask for a tighter research pass before execution.
+Before any Polymarket order, show market, outcome, side, size, current executable entry, market-implied prior, posterior range, EV, liquidity/depth, resolution ambiguity, and exact tool inputs. Never use last trade as executable entry or an actionable prior. If the research output lacks `priorSource`, `entryYes`/`entryNo`, posterior range, or decision, rehydrate or ask for a tighter research pass before execution.
 
 ### Token Swap Aggregator
 
@@ -293,7 +293,7 @@ Ask `wayfinder-research` for Prediction Market Forecast Mode when a task needs P
 
 Ask `wayfinder-research` for Token/Perp Research Mode when a task needs token/perp thesis work. It must return `perpSide`, `positionIntent`, `thesisPieces`, lens scores, and explicit open questions for leverage, margin mode, sizing, close/reduce/flip intent, or execution math.
 
-For quote/snapshot updates on an existing forecast or thesis, reuse prior posterior/view only when the user asks to continue prior work or a run ID references it. Rehydrate current quote/order book or market snapshot, recompute edge or changed-fields effect, and do not regenerate a new thesis unless there is new evidence.
+For quote/snapshot updates on an existing forecast or thesis, reuse prior posterior/view only when the user asks to continue prior work or a run ID references it. Rehydrate current quote/order book or market snapshot, recompute edge or changed-fields effect, and do not regenerate a new thesis unless there is new evidence. Quote/evidence/outcome updates should preserve lineage with `parentId` and `relatedLogIds`.
 
 Use `.wayfinder_runs/market_intel_log.jsonl` only as an audit/calibration log for durable forecast cases, token/perp theses, quote updates, evidence updates, quant validations, final decisions, and outcome updates. Do not treat logged market facts as live; rehydrate price, order book, funding, OI, liquidity, and news before any action. Stale entries are `audit_only`.
 

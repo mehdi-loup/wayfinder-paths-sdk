@@ -49,6 +49,8 @@ def append_log(entry: dict[str, Any], path: str | Path | None = None) -> dict[st
     persisted.setdefault("createdAt", _utc_now())
     persisted.setdefault("safeToReuseWithoutRehydration", False)
     persisted.setdefault("mustRehydrate", [])
+    persisted.setdefault("parentId", None)
+    persisted.setdefault("relatedLogIds", [])
     persisted.setdefault("artifactRefs", [])
     persisted.setdefault("sources", [])
     persisted.setdefault("outcome", None)
@@ -122,6 +124,8 @@ def update_outcome(
     outcome_entry = {
         "producer": "wayfinder",
         "kind": "outcome_update",
+        "parentId": entry_id,
+        "relatedLogIds": [entry_id],
         "subject": (prior or {}).get("subject", {}),
         "observedAt": _utc_now(),
         "summary": f"Outcome update for {entry_id}",

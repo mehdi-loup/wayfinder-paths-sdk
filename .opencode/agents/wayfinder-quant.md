@@ -99,7 +99,7 @@ Polymarket quant:
 
 - Use read-only `polymarket_read` to rehydrate markets for calibration, order-book sweeps, and cross-market scans instead of depending on large handoffs.
 - Use `wayfinder_paths.quant.polymarket_edge` for executable-price EV, normalized binary priors, evidence-card scoring, posterior bands, conservative trade gates, Kelly, and log-odds updates.
-- Never treat last trade as executable entry. Use quote/order-book depth for target-size entries.
+- Never treat last trade as executable entry or an actionable prior. Use quote/order-book depth for target-size entries.
 
 Market intelligence log:
 
@@ -107,6 +107,8 @@ Market intelligence log:
 - Do not use the log as live market memory. Rehydrate price, order book, funding, OI, liquidity, and news before any action.
 - Treat log entries as hypothesis seeds only. Stale entries are audit/calibration context, not current market state.
 - If logging is useful, run a bounded script that imports `wayfinder_paths.core.market_intel_log` and include returned IDs in `logRefs`.
+
+Perp funding convention: positive funding means longs pay shorts. For funding-adjusted returns, long return is `price_return - funding`; short return is `-price_return + funding`.
 
 If the requested analysis needs a visual workspace update, return chart-ready data and a `visualSpec`; do not call visual tools yourself. The primary agent will pass that spec to `wayfinder-visual`.
 
