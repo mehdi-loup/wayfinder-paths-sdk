@@ -300,7 +300,10 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "Prediction Market Forecast Mode" in research
     assert "priorSource" in research
     assert "Last trade is context-only" in research
-    assert "normalized_order_book" in research
+    assert "bid_ask_mid" in research
+    assert "normalized_binary_prices" in research
+    assert "order_book_sweep" in research
+    assert "last_trade_context_only" in research
     assert "log_odds_update" in research
     assert "log_odds_evidence_update" in research
     assert "Build evidence cards" in research
@@ -310,10 +313,15 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "quote_update" in research
     assert "parentId" in research
     assert "relatedLogIds" in research
-    assert "Token/Perp Research Mode" in research
+    assert "Market Research / Thesis Mode" in research
+    assert "quick lookups" in research
+    assert "do not force a thesis" in research
+    assert "snapshot checks" in research
+    assert "DeFi protocols" in research
+    assert "yield routes" in research
     assert "perpSide" in research
     assert "positionIntent" in research
-    assert "thesisPieces" in research
+    assert "Only include `perpSide` and `positionIntent`" in research
     assert "changedFields" in research
     assert "effectOnThesis" in research
 
@@ -337,6 +345,7 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "Use the executable market/order-book distribution as the prior" in research
     assert "stale log entries" in research
     assert "Market intelligence log" in research
+    assert "Do not log every tool call" in research
     assert "logRefs" in research
     assert "artifactRefs" in research
 

@@ -324,12 +324,15 @@ def posterior_band_from_evidence(
     }
 
 
-def normalize_binary_prices(yes_price: float, no_price: float) -> dict[str, float]:
+def normalize_binary_prices(
+    yes_price: float, no_price: float
+) -> dict[str, float | str]:
     """Normalize executable YES/NO prices into a no-vig market prior."""
     yes = _require_positive(yes_price, "yes_price")
     no = _require_positive(no_price, "no_price")
     total = yes + no
     return {
+        "priorSource": "normalized_binary_prices",
         "marketPrior": yes / total,
         "yesPrice": yes,
         "noPrice": no,

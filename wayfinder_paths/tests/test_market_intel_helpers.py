@@ -56,6 +56,7 @@ def test_polymarket_edge_binary_math() -> None:
 
 def test_polymarket_edge_order_book_prior_and_log_odds_update() -> None:
     normalized = normalize_binary_prices(0.45, 0.58)
+    assert normalized["priorSource"] == "normalized_binary_prices"
     assert normalized["marketPrior"] == pytest.approx(0.4368932039)
     assert normalized["spreadCost"] == pytest.approx(0.03)
 
