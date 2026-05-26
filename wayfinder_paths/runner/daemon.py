@@ -31,6 +31,10 @@ from wayfinder_paths.runner.paths import RunnerPaths
 from wayfinder_paths.runner.script_resolver import resolve_script_path
 
 JOB_RESULT_MARKER = "WAYFINDER_JOB_RESULT "
+LOCK_TIMEOUT_SECONDS = 3
+LOCK_BUSY_MSG = (
+    "Runner Daemon lock is busy, no operations were completed, please try again later"
+)
 SESSION_ENV_KEYS = (
     "OPENCODE_SESSION_ID",
     "OPENCODE_SESSIONID",
@@ -167,14 +171,16 @@ class RunnerDaemon:
             f"Runner daemon v{__version__} listening on {self._paths.sock_path}"
         )
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda *_: self.stop())
+        try:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                signal.signal(sig, lambda *_: self.stop())
+        except ValueError:
+            pass
         try:
             self._loop()
         finally:
             self._shutdown.set()
-            if self._control is not None:
-                self._control.stop()
+            self._control.stop()
             with self._lock:
                 for rp in self._running.values():
                     _kill_process_group(rp.popen.pid, sig=signal.SIGTERM)
@@ -462,11 +468,10 @@ class RunnerDaemon:
                 "WAYFINDER_RUNNER_REASON": str(reason),
             }
         )
-        payload_env = payload.get("env")
-        if isinstance(payload_env, dict):
-            env.update({str(k): str(v) for k, v in payload_env.items()})
+        if payload.get("env"):
+            env.update(payload["env"])
         if payload.get("wallet_label"):
-            env["WAYFINDER_WALLET_LABEL"] = str(payload.get("wallet_label"))
+            env["WAYFINDER_WALLET_LABEL"] = payload["wallet_label"]
         root = str(self._paths.repo_root)
         cur = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{root}{os.pathsep}{cur}" if cur else root
@@ -577,19 +582,20 @@ class RunnerDaemon:
 
             script = resolve_script_path(self._paths, str(sp))
             args = payload.get("args") or []
-            if args is None:
-                args = []
-            if not isinstance(args, list):
-                raise ValueError("payload.args must be a list of strings")
-            arg_list = [str(a) for a in args if str(a).strip()]
+            arg_list = [a for a in args if a]
             return [sys.executable, str(script), *arg_list]
 
         raise ValueError(f"Unsupported job type: {job_type}")
 
     # Control-plane methods (called by runnerctl over the local socket)
     def ctl_status(self) -> dict[str, Any]:
-        with self._lock:
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
             return {
+                "ok": False,
+                "error": LOCK_BUSY_MSG,
+            }
+        try:
+            result = {
                 "ok": True,
                 "result": {
                     "version": __version__,
@@ -608,6 +614,9 @@ class RunnerDaemon:
                     "recent_runs": self._db.last_runs(limit=20),
                 },
             }
+        finally:
+            self._lock.release()
+        return result
 
     def ctl_shutdown(self) -> dict[str, Any]:
         self.stop()
@@ -784,13 +793,20 @@ class RunnerDaemon:
             return {"ok": False, "error": f"Job not found: {name}"}
         job, _ = result
 
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+            return {
+                "ok": False,
+                "error": LOCK_BUSY_MSG,
+            }
         killed: list[dict[str, Any]] = []
-        with self._lock:
+        try:
             for run_id, rp in list(self._running.items()):
                 if rp.job_id != job.id:
                     continue
                 _kill_process_group(rp.popen.pid, sig=sig_val)
                 killed.append({"run_id": run_id, "pid": rp.popen.pid})
+        finally:
+            self._lock.release()
 
         if not killed:
             return {"ok": False, "error": "job is not currently running"}
@@ -816,8 +832,15 @@ class RunnerDaemon:
             "payload": job.payload,
             "interval_seconds": job.interval_seconds,
         }
-        with self._lock:
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+            return {
+                "ok": False,
+                "error": LOCK_BUSY_MSG,
+            }
+        try:
             run_id = self._maybe_start_job(job=job_dict, now=now, reason="run_once")
+        finally:
+            self._lock.release()
         if run_id is None:
             return {
                 "ok": False,
@@ -831,11 +854,18 @@ class RunnerDaemon:
             return {"ok": False, "error": f"Job not found: {name}"}
         job, _ = result
 
-        with self._lock:
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+            return {
+                "ok": False,
+                "error": LOCK_BUSY_MSG,
+            }
+        try:
             if self._running_by_job.get(job.id, 0) >= 1:
                 return {"ok": False, "error": "job is currently running"}
             self._db.delete_job(name=name)
             self._running_by_job.pop(job.id, None)
+        finally:
+            self._lock.release()
 
         self._sync_to_backend_async()
         return {"ok": True, "result": {"name": name, "deleted": True}}
