@@ -261,6 +261,8 @@ def test_opencode_agents_route_simple_onchain_token_charts_without_quant() -> No
     assert "visual_search_chart_series" in primary
     assert "Do not call `wayfinder-quant`" in primary
     assert "simple iteration" in primary
+    assert "call `visual_set_active_market` directly" in primary
+    assert "Delegate to `wayfinder-visual` only for workspace chart creation" in primary
 
     assert "Single-token chart fast path" in visual
     assert 'market_type="onchain-spot"' in visual

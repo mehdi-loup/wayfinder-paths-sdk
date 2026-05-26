@@ -363,7 +363,7 @@ Shells frontend controller: chart context, default market switching, chart works
 
 - Describe the intended visual outcome and key units, not a brittle step-by-step tool script.
 - Do not instruct the visual worker to run parallel chart-series searches or speculative/empty queries. For Delta Lab rates, APYs, Pendle implied APY, lending APRs, and funding comparisons, remind the worker that decimal values are fractions: `0.12` is `12%`. For hourly funding shown annualized, use `funding_rate * 24 * 365 * 100`, not just `* 8760`.
-- For simple follow-ups like "chart it", "show PROMPT", or "plot this token" after token/protocol research, delegate only to `wayfinder-visual` and render the single tradable market in the main Shells pane. Do not call `wayfinder-quant` for a simple iteration.
+- For simple follow-ups like "chart it", "show PROMPT", or "plot this token" after token/protocol research, call `visual_set_active_market` directly when the request resolves to one tradable market. Delegate to `wayfinder-visual` only for workspace chart creation, comparisons, overlays, or multi-series views. Do not call `wayfinder-quant` for a simple iteration.
 
 #### Completion Criteria
 
