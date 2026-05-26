@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from wayfinder_paths.core.constants.polymarket import derive_deposit_wallet
+from wayfinder_paths.mcp.preview import build_polymarket_place_market_order_preview
 from wayfinder_paths.mcp.tools.polymarket import (
     polymarket_get_state,
     polymarket_place_market_order,
@@ -244,52 +245,75 @@ async def test_polymarket_get_market_summary_and_raw_modes():
 
 @pytest.mark.asyncio
 async def test_polymarket_quote_uses_adapter_quote_by_token_id():
+    quote_market_order = AsyncMock(
+        return_value=(
+            True,
+            {
+                "token_id": "tok_yes",
+                "side": "BUY",
+                "requested_amount": 4.2,
+                "filled_amount": 4.2,
+                "fully_fillable": True,
+                "average_price": 0.42,
+                "shares": 10.0,
+                "notional_usdc": 4.2,
+            },
+        )
+    )
     with (
         patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
         patch(
             "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.quote_market_order",
-            new=AsyncMock(
-                return_value=(
-                    True,
-                    {
-                        "token_id": "tok_yes",
-                        "side": "BUY",
-                        "average_price": 0.42,
-                        "shares": 10.0,
-                    },
-                )
-            ),
+            new=quote_market_order,
         ),
     ):
         out = await polymarket_read(
             "quote",
             token_id="tok_yes",
             side="BUY",
-            amount_collateral=4.2,
+            buy_amount_pusd=4.2,
         )
         assert out["ok"] is True
         assert out["result"]["action"] == "quote"
         assert out["result"]["token_id"] == "tok_yes"
+        assert out["result"]["sizing_kind"] == "buy_amount_pusd"
+        assert out["result"]["buy_amount_pusd"] == 4.2
+        assert out["result"]["sell_amount_shares"] is None
+        assert quote_market_order.await_args.kwargs["amount"] == 4.2
+        summary = out["result"]["executionSummary"]
+        assert summary["inputAmountType"] == "collateral"
+        assert summary["requestedCollateral"] == 4.2
+        assert summary["requestedShares"] is None
+        assert summary["collateralSpent"] == 4.2
+        assert summary["sharesFilled"] == 10.0
+        assert summary["avgPrice"] == 0.42
+        assert summary["fillRatio"] == 1.0
+        assert summary["status"] == "filled"
         assert out["result"]["quote"]["average_price"] == 0.42
 
 
 @pytest.mark.asyncio
 async def test_polymarket_quote_uses_adapter_quote_by_market_slug():
+    quote_prediction = AsyncMock(
+        return_value=(
+            True,
+            {
+                "token_id": "tok_yes",
+                "side": "SELL",
+                "requested_amount": 3.0,
+                "filled_amount": 3.0,
+                "fully_fillable": True,
+                "average_price": 0.61,
+                "shares": 3.0,
+                "notional_usdc": 1.83,
+            },
+        )
+    )
     with (
         patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
         patch(
             "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.quote_prediction",
-            new=AsyncMock(
-                return_value=(
-                    True,
-                    {
-                        "token_id": "tok_yes",
-                        "side": "SELL",
-                        "average_price": 0.61,
-                        "shares": 3.0,
-                    },
-                )
-            ),
+            new=quote_prediction,
         ),
     ):
         out = await polymarket_read(
@@ -297,28 +321,73 @@ async def test_polymarket_quote_uses_adapter_quote_by_market_slug():
             market_slug="market-slug",
             outcome="YES",
             side="SELL",
-            shares=3.0,
+            sell_amount_shares=3.0,
         )
         assert out["ok"] is True
         assert out["result"]["action"] == "quote"
         assert out["result"]["side"] == "SELL"
+        assert out["result"]["sizing_kind"] == "sell_amount_shares"
+        assert out["result"]["buy_amount_pusd"] is None
+        assert out["result"]["sell_amount_shares"] == 3.0
+        assert quote_prediction.await_args.kwargs["amount"] == 3.0
+        summary = out["result"]["executionSummary"]
+        assert summary["inputAmountType"] == "shares"
+        assert summary["requestedCollateral"] is None
+        assert summary["requestedShares"] == 3.0
+        assert summary["collateralReceived"] == 1.83
+        assert summary["sharesFilled"] == 3.0
+        assert summary["fillRatio"] == 1.0
         assert out["result"]["quote"]["average_price"] == 0.61
 
 
 @pytest.mark.asyncio
-async def test_polymarket_quote_buy_requires_amount_collateral():
+async def test_polymarket_quote_buy_requires_buy_amount_pusd():
     with patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}):
         out = await polymarket_read("quote", token_id="tok_yes", side="BUY")
         assert out["ok"] is False
         assert out["error"]["code"] == "error"
+        assert "buy_amount_pusd" in out["error"]["message"]
 
 
 @pytest.mark.asyncio
-async def test_polymarket_quote_sell_requires_shares():
+async def test_polymarket_quote_sell_requires_sell_amount_shares():
     with patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}):
         out = await polymarket_read("quote", token_id="tok_yes", side="SELL")
         assert out["ok"] is False
         assert out["error"]["code"] == "error"
+        assert "sell_amount_shares" in out["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_polymarket_quote_rejects_ambiguous_or_side_mismatched_size():
+    with patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}):
+        both = await polymarket_read(
+            "quote",
+            token_id="tok_yes",
+            side="BUY",
+            buy_amount_pusd=4.0,
+            sell_amount_shares=10.0,
+        )
+        assert both["ok"] is False
+        assert "exactly one sizing field" in both["error"]["message"]
+
+        side_mismatch = await polymarket_read(
+            "quote",
+            token_id="tok_yes",
+            side="SELL",
+            buy_amount_pusd=4.0,
+        )
+        assert side_mismatch["ok"] is False
+        assert "sell_amount_shares" in side_mismatch["error"]["message"]
+
+        non_positive = await polymarket_read(
+            "quote",
+            token_id="tok_yes",
+            side="BUY",
+            buy_amount_pusd=0,
+        )
+        assert non_positive["ok"] is False
+        assert "positive" in non_positive["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -334,7 +403,7 @@ async def test_polymarket_quote_surfaces_adapter_failure():
             "quote",
             token_id="tok_yes",
             side="BUY",
-            amount_collateral=4.2,
+            buy_amount_pusd=4.2,
         )
         assert out["ok"] is False
         assert out["error"]["code"] == "error"
@@ -342,8 +411,28 @@ async def test_polymarket_quote_surfaces_adapter_failure():
 
 
 @pytest.mark.asyncio
-async def test_polymarket_place_market_order(tmp_path: Path, monkeypatch):
+async def test_polymarket_place_market_order_buy_returns_normalized_summary(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.setenv("WAYFINDER_RUNS_DIR", str(tmp_path / "runs"))
+    place_prediction = AsyncMock(
+        return_value=(
+            True,
+            {
+                "status": "matched",
+                "quote": {
+                    "token_id": "tok_yes",
+                    "side": "BUY",
+                    "requested_amount": 2.0,
+                    "filled_amount": 2.0,
+                    "fully_fillable": True,
+                    "average_price": 0.05,
+                    "shares": 40.0,
+                    "notional_usdc": 2.0,
+                },
+            },
+        )
+    )
 
     with (
         patch(_FIND_WALLET, AsyncMock(return_value=_WALLET)),
@@ -353,7 +442,7 @@ async def test_polymarket_place_market_order(tmp_path: Path, monkeypatch):
         patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
         patch(
             "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.place_prediction",
-            new=AsyncMock(return_value=(True, {"status": "matched"})),
+            new=place_prediction,
         ),
     ):
         out = await polymarket_place_market_order(
@@ -361,9 +450,103 @@ async def test_polymarket_place_market_order(tmp_path: Path, monkeypatch):
             market_slug="bitcoin-above-70k-on-february-9",
             outcome="YES",
             side="BUY",
-            amount_collateral=2.0,
+            buy_amount_pusd=2.0,
         )
         assert out["ok"] is True
         assert out["result"]["status"] == "confirmed"
+        assert out["result"]["sizing_kind"] == "buy_amount_pusd"
+        assert out["result"]["buy_amount_pusd"] == 2.0
+        assert out["result"]["sell_amount_shares"] is None
+        assert place_prediction.await_args.kwargs["amount_collateral"] == 2.0
+        summary = out["result"]["executionSummary"]
+        assert summary["requestedCollateral"] == 2.0
+        assert summary["requestedShares"] is None
+        assert summary["collateralSpent"] == 2.0
+        assert summary["sharesFilled"] == 40.0
+        assert summary["avgPrice"] == 0.05
+        assert summary["fillRatio"] == 1.0
+        assert summary["status"] == "filled"
+        assert out["result"]["raw"]["status"] == "matched"
         effects = out["result"]["effects"]
         assert effects and effects[0]["label"] == "place_market_order"
+
+
+@pytest.mark.asyncio
+async def test_polymarket_place_market_order_sell_maps_shares_to_adapter(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("WAYFINDER_RUNS_DIR", str(tmp_path / "runs"))
+    place_market_order = AsyncMock(
+        return_value=(
+            True,
+            {
+                "status": "matched",
+                "quote": {
+                    "token_id": "tok_yes",
+                    "side": "SELL",
+                    "requested_amount": 10.0,
+                    "filled_amount": 10.0,
+                    "fully_fillable": True,
+                    "average_price": 0.052,
+                    "shares": 10.0,
+                    "notional_usdc": 0.52,
+                },
+            },
+        )
+    )
+
+    with (
+        patch(_FIND_WALLET, AsyncMock(return_value=_WALLET)),
+        patch(_GET_SIGN_CB, AsyncMock(return_value=(_SIGN_CB, _ADDR))),
+        patch(_GET_HASH_CB, AsyncMock(return_value=(_HASH_CB, _ADDR))),
+        patch(_GET_TYPED_CB, AsyncMock(return_value=(_TYPED_CB, _ADDR))),
+        patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
+        patch(
+            "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.place_market_order",
+            new=place_market_order,
+        ),
+    ):
+        out = await polymarket_place_market_order(
+            wallet_label="main",
+            token_id="tok_yes",
+            side="SELL",
+            sell_amount_shares=10.0,
+        )
+        assert out["ok"] is True
+        assert place_market_order.await_args.kwargs["amount"] == 10.0
+        assert out["result"]["sizing_kind"] == "sell_amount_shares"
+        summary = out["result"]["executionSummary"]
+        assert summary["inputAmountType"] == "shares"
+        assert summary["requestedCollateral"] is None
+        assert summary["requestedShares"] == 10.0
+        assert summary["collateralReceived"] == 0.52
+        assert summary["sharesFilled"] == 10.0
+        assert summary["avgPrice"] == 0.052
+        assert summary["fillRatio"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_polymarket_place_market_order_preview_uses_side_specific_size():
+    buy = await build_polymarket_place_market_order_preview(
+        {
+            "wallet_label": "main",
+            "market_slug": "market",
+            "outcome": "YES",
+            "side": "BUY",
+            "buy_amount_pusd": 4,
+        }
+    )
+    assert "BUY spend: 4 pUSD" in buy["summary"]
+    assert "amount_collateral" not in buy["summary"]
+
+    sell = await build_polymarket_place_market_order_preview(
+        {
+            "wallet_label": "main",
+            "market_slug": "market",
+            "outcome": "YES",
+            "side": "SELL",
+            "sell_amount_shares": 77,
+        }
+    )
+    assert "SELL size: 77 shares" in sell["summary"]
+    assert "amount_collateral" not in sell["summary"]

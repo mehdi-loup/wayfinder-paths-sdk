@@ -11,7 +11,7 @@
 - Trending markets: `mcp__wayfinder__polymarket_read(action="trending", limit=25)` (compact `candidates` by default)
 - Event candidates: `mcp__wayfinder__polymarket_read(action="get_event", event_slug="...", candidate_limit=5)`
 - Market metadata by slug: `mcp__wayfinder__polymarket_read(action="get_market", market_slug="...")` (bounded rules/description by default)
-- Book-based trade quote: `mcp__wayfinder__polymarket_read(action="quote", market_slug="...", outcome="YES", side="BUY", amount_collateral=100)`
+- Book-based trade quote: `mcp__wayfinder__polymarket_read(action="quote", market_slug="...", outcome="YES", side="BUY", buy_amount_pusd=100)`
 - Price history (token_id): `mcp__wayfinder__polymarket_read(action="price_history", token_id="...", interval="1d", fidelity=5)`
 - Full user status: `mcp__wayfinder__polymarket_get_state(wallet_label="main")`
 
@@ -52,8 +52,9 @@ If you’re analyzing a market by slug, use `get_market_prices_history(market_sl
 
 ## Book-based quote vs price
 
-- Use `quote_market_order(token_id=..., side="BUY" | "SELL", amount=...)` when you need average execution from the current book.
-- `BUY amount` is pUSD to spend; `SELL amount` is shares to sell.
+- Use `quote_market_order(token_id=..., side="BUY" | "SELL", amount=...)` in scripts when you need average execution from the current book.
+- In MCP, use `buy_amount_pusd` for BUY quotes and `sell_amount_shares` for SELL quotes.
+- BUY amount is pUSD spend; SELL amount is shares to sell. Do not describe a BUY as "N shares @ price" unless the share count comes from `executionSummary.sharesFilled`.
 - Quote returns weighted-average price, worst fill, partial-fill status, and per-level fills.
 - `get_price(...)` is not a substitute for this; it does not tell you the weighted average execution price for a sized trade.
 

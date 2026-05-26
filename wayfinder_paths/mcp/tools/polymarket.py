@@ -250,6 +250,119 @@ def _compact_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_pm_side(side: Any) -> Literal["BUY", "SELL"]:
+    normalized = str(side or "").strip().upper()
+    if normalized not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    return normalized  # type: ignore[return-value]
+
+
+def _validate_pm_market_order_size(
+    *,
+    side: Literal["BUY", "SELL"],
+    buy_amount_pusd: float | None,
+    sell_amount_shares: float | None,
+) -> dict[str, Any]:
+    has_buy = buy_amount_pusd is not None
+    has_sell = sell_amount_shares is not None
+    if has_buy and has_sell:
+        raise ValueError(
+            "Pass exactly one sizing field: buy_amount_pusd for BUY or "
+            "sell_amount_shares for SELL"
+        )
+    if side == "BUY":
+        if not has_buy:
+            if has_sell:
+                raise ValueError(
+                    "BUY requires buy_amount_pusd; sell_amount_shares is only valid for SELL"
+                )
+            raise ValueError("BUY requires buy_amount_pusd")
+        amount = throw_if_not_number(
+            "buy_amount_pusd must be a number", buy_amount_pusd
+        )
+        if amount <= 0:
+            raise ValueError("buy_amount_pusd must be positive")
+        return {
+            "sizing_kind": "buy_amount_pusd",
+            "buy_amount_pusd": amount,
+            "sell_amount_shares": None,
+            "adapter_amount": amount,
+        }
+
+    if not has_sell:
+        if has_buy:
+            raise ValueError(
+                "SELL requires sell_amount_shares; buy_amount_pusd is only valid for BUY"
+            )
+        raise ValueError("SELL requires sell_amount_shares")
+    amount = throw_if_not_number(
+        "sell_amount_shares must be a number", sell_amount_shares
+    )
+    if amount <= 0:
+        raise ValueError("sell_amount_shares must be positive")
+    return {
+        "sizing_kind": "sell_amount_shares",
+        "buy_amount_pusd": None,
+        "sell_amount_shares": amount,
+        "adapter_amount": amount,
+    }
+
+
+def _safe_ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _normalize_pm_execution_summary(
+    *,
+    side: Literal["BUY", "SELL"],
+    sizing: dict[str, Any],
+    quote: dict[str, Any] | None,
+    raw: dict[str, Any] | None = None,
+    summary_source: str = "adapter_quote",
+    failed: bool = False,
+) -> dict[str, Any]:
+    q = quote if isinstance(quote, dict) else {}
+    requested_collateral = sizing.get("buy_amount_pusd")
+    requested_shares = sizing.get("sell_amount_shares")
+    collateral_spent = _as_float(q.get("notional_usdc")) if side == "BUY" else None
+    collateral_received = _as_float(q.get("notional_usdc")) if side == "SELL" else None
+    shares_filled = _as_float(q.get("shares"))
+    avg_price = _as_float(_first_present(q, "average_price", "avgPrice", "avg_price"))
+    fill_ratio = (
+        _safe_ratio(collateral_spent, requested_collateral)
+        if side == "BUY"
+        else _safe_ratio(shares_filled, requested_shares)
+    )
+    has_fill = bool((shares_filled or 0) > 0) or bool(
+        (collateral_spent or collateral_received or 0) > 0
+    )
+    if failed:
+        status = "failed"
+    elif q.get("fully_fillable") is True:
+        status = "filled"
+    elif has_fill:
+        status = "partial"
+    else:
+        status = "rejected"
+
+    return {
+        "side": side,
+        "inputAmountType": "collateral" if side == "BUY" else "shares",
+        "requestedCollateral": requested_collateral,
+        "requestedShares": requested_shares,
+        "collateralSpent": collateral_spent,
+        "collateralReceived": collateral_received,
+        "sharesFilled": shares_filled,
+        "avgPrice": avg_price,
+        "fillRatio": fill_ratio,
+        "status": status,
+        "summarySource": summary_source,
+        "rawStatus": raw.get("status") if isinstance(raw, dict) else None,
+    }
+
+
 def _annotate(
     *,
     address: str,
@@ -410,8 +523,8 @@ async def polymarket_read(
     # clob data
     token_id: str | None = None,
     side: Literal["BUY", "SELL"] = "BUY",
-    amount_collateral: float | None = None,
-    shares: float | None = None,
+    buy_amount_pusd: float | None = None,
+    sell_amount_shares: float | None = None,
     interval: str | None = "1d",
     start_ts: int | None = None,
     end_ts: int | None = None,
@@ -430,7 +543,8 @@ async def polymarket_read(
       - `get_market` / `get_event`: fetch by `market_slug` / `event_slug`.
         These discovery actions return compact candidates by default; pass
         `summary=False` only when debugging raw Gamma/backend payloads.
-      - `quote`: market-order quote. BUY needs `amount_collateral` (USDC), SELL needs `shares`.
+      - `quote`: market-order quote. BUY needs `buy_amount_pusd`; SELL needs
+        `sell_amount_shares`. Results include a normalized execution summary.
         Provide `market_slug`+`outcome` OR `token_id`.
       - `price`: best `BUY`/`SELL` price for a `token_id`.
       - `order_book`: full book for a `token_id`.
@@ -573,21 +687,12 @@ async def polymarket_read(
                 return ok({"action": action, "event": e})
 
             case "quote":
-                if side == "BUY":
-                    throw_if_none(
-                        "amount_collateral is required for BUY quote", amount_collateral
-                    )
-                    quote_amount = throw_if_not_number(
-                        "amount_collateral must be a number", amount_collateral
-                    )
-                else:
-                    throw_if_none("shares is required for SELL quote", shares)
-                    quote_amount = throw_if_not_number(
-                        "shares must be a number", shares
-                    )
-
-                if quote_amount <= 0:
-                    raise ValueError("quote amount must be positive")
+                side = _normalize_pm_side(side)
+                sizing = _validate_pm_market_order_size(
+                    side=side,
+                    buy_amount_pusd=buy_amount_pusd,
+                    sell_amount_shares=sell_amount_shares,
+                )
 
                 slug = str(market_slug or "").strip()
                 if slug:
@@ -595,7 +700,7 @@ async def polymarket_read(
                         market_slug=slug,
                         outcome=outcome,
                         side=side,
-                        amount=quote_amount,
+                        amount=sizing["adapter_amount"],
                     )
                 else:
                     tid = str(token_id or "").strip()
@@ -604,16 +709,25 @@ async def polymarket_read(
                     ok_q, q = await adapter.quote_market_order(
                         token_id=tid,
                         side=side,
-                        amount=quote_amount,
+                        amount=sizing["adapter_amount"],
                     )
 
                 if not ok_q:
                     return err("error", str(q))
+                execution_summary = _normalize_pm_execution_summary(
+                    side=side,
+                    sizing=sizing,
+                    quote=q if isinstance(q, dict) else None,
+                )
                 return ok(
                     {
                         "action": action,
                         "token_id": q["token_id"],
                         "side": side,
+                        "sizing_kind": sizing["sizing_kind"],
+                        "buy_amount_pusd": sizing["buy_amount_pusd"],
+                        "sell_amount_shares": sizing["sell_amount_shares"],
+                        "executionSummary": execution_summary,
                         "quote": q,
                     }
                 )
@@ -814,14 +928,14 @@ async def polymarket_place_market_order(
     market_slug: str | None = None,
     outcome: str | int = "YES",
     token_id: str | None = None,
-    amount_collateral: float | None = None,
-    shares: float | None = None,
+    buy_amount_pusd: float | None = None,
+    sell_amount_shares: float | None = None,
     max_slippage_pct: float | None = None,
 ) -> dict[str, Any]:
     """Place a Polymarket market order (FOK limit at a slippage-derived cap).
 
-    Provide `market_slug`+`outcome` OR `token_id`. BUY needs `amount_collateral` (pUSD);
-    SELL needs `shares`. The adapter quotes the book and signs an FOK limit at
+    Provide `market_slug`+`outcome` OR `token_id`. BUY needs `buy_amount_pusd`;
+    SELL needs `sell_amount_shares`. The adapter quotes the book and signs an FOK limit at
     `worst_price * (1 ± max_slippage_pct/100)` (default 2%) — order is killed if the
     book moves past the cap.
 
@@ -831,15 +945,17 @@ async def polymarket_place_market_order(
         market_slug: Polymarket market slug; used with `outcome` to resolve token_id.
         outcome: `"YES"`/`"NO"` or numeric index (default `"YES"`).
         token_id: Direct CLOB token id; alternative to market_slug + outcome.
-        amount_collateral: pUSD to spend (required for BUY).
-        shares: Shares to sell (required for SELL).
+        buy_amount_pusd: pUSD to spend (required for BUY).
+        sell_amount_shares: Shares to sell (required for SELL).
         max_slippage_pct: Slippage cap as a percent (e.g. 2.0). None = adapter default (2%).
     """
     wallet_label = throw_if_empty_str("wallet_label is required", wallet_label)
-    if side == "BUY":
-        throw_if_none("amount_collateral is required for BUY", amount_collateral)
-    else:
-        throw_if_none("shares is required for SELL", shares)
+    side = _normalize_pm_side(side)
+    sizing = _validate_pm_market_order_size(
+        side=side,
+        buy_amount_pusd=buy_amount_pusd,
+        sell_amount_shares=sell_amount_shares,
+    )
 
     adapter, sender = await _make_polymarket_adapter(wallet_label)
     try:
@@ -848,14 +964,14 @@ async def polymarket_place_market_order(
                 ok_trade, res = await adapter.place_prediction(
                     market_slug=str(market_slug),
                     outcome=outcome,
-                    amount_collateral=float(amount_collateral),
+                    amount_collateral=sizing["adapter_amount"],
                     max_slippage_pct=max_slippage_pct,
                 )
             else:
                 ok_trade, res = await adapter.cash_out_prediction(
                     market_slug=str(market_slug),
                     outcome=outcome,
-                    shares=float(shares),
+                    shares=sizing["adapter_amount"],
                     max_slippage_pct=max_slippage_pct,
                 )
         else:
@@ -863,9 +979,18 @@ async def polymarket_place_market_order(
             ok_trade, res = await adapter.place_market_order(
                 token_id=tid,
                 side=side,
-                amount=float(amount_collateral if side == "BUY" else shares),
+                amount=sizing["adapter_amount"],
                 max_slippage_pct=max_slippage_pct,
             )
+        raw = res if isinstance(res, dict) else {"result": res}
+        raw_quote = raw.get("quote") if isinstance(raw.get("quote"), dict) else None
+        execution_summary = _normalize_pm_execution_summary(
+            side=side,
+            sizing=sizing,
+            quote=raw_quote,
+            raw=raw,
+            failed=not ok_trade and raw_quote is None,
+        )
         effects = [
             {
                 "type": "polymarket",
@@ -886,10 +1011,9 @@ async def polymarket_place_market_order(
                 "token_id": str(token_id) if token_id else None,
                 "outcome": str(outcome),
                 "side": side,
-                "amount_collateral": float(amount_collateral)
-                if amount_collateral is not None
-                else None,
-                "shares": float(shares) if shares is not None else None,
+                "sizing_kind": sizing["sizing_kind"],
+                "buy_amount_pusd": sizing["buy_amount_pusd"],
+                "sell_amount_shares": sizing["sell_amount_shares"],
                 "max_slippage_pct": float(max_slippage_pct)
                 if max_slippage_pct is not None
                 else None,
@@ -904,14 +1028,15 @@ async def polymarket_place_market_order(
                 "token_id": str(token_id) if token_id else None,
                 "outcome": str(outcome),
                 "side": side,
-                "amount_collateral": float(amount_collateral)
-                if amount_collateral is not None
-                else None,
-                "shares": float(shares) if shares is not None else None,
+                "sizing_kind": sizing["sizing_kind"],
+                "buy_amount_pusd": sizing["buy_amount_pusd"],
+                "sell_amount_shares": sizing["sell_amount_shares"],
                 "max_slippage_pct": float(max_slippage_pct)
                 if max_slippage_pct is not None
                 else None,
+                "executionSummary": execution_summary,
                 "effects": effects,
+                "raw": raw,
             }
         )
     finally:

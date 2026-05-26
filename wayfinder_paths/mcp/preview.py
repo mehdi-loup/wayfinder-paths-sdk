@@ -247,14 +247,22 @@ async def build_polymarket_place_market_order_preview(
     tool_input: dict[str, Any],
 ) -> dict[str, Any]:
     header, base = await _pm_preview_base(tool_input, "POLYMARKET_PLACE_MARKET_ORDER\n")
+    side = str(tool_input.get("side") or "").upper()
+    if side == "BUY":
+        size_line = f"BUY spend: {tool_input.get('buy_amount_pusd')} pUSD"
+    elif side == "SELL":
+        size_line = f"SELL size: {tool_input.get('sell_amount_shares')} shares"
+    else:
+        size_line = (
+            "size: (missing; BUY uses buy_amount_pusd, SELL uses sell_amount_shares)"
+        )
     details = (
         "\n\nMARKET ORDER\n"
         f"market_slug: {tool_input.get('market_slug')}\n"
         f"outcome: {tool_input.get('outcome')}\n"
         f"token_id: {tool_input.get('token_id')}\n"
         f"side: {tool_input.get('side')}\n"
-        f"amount_collateral: {tool_input.get('amount_collateral')}\n"
-        f"shares: {tool_input.get('shares')}\n"
+        f"{size_line}\n"
         f"max_slippage_pct: {tool_input.get('max_slippage_pct')} (None = adapter default 2%)"
     )
     return {"summary": header + base + details}

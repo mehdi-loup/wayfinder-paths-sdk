@@ -40,7 +40,7 @@ ok, res = await adapter.place_prediction(
 
 MCP shortcut:
 
-- `mcp__wayfinder__polymarket_place_market_order(wallet_label="main", market_slug="bitcoin-above-70k-on-february-9", outcome="YES", side="BUY", amount_collateral=2)`
+- `mcp__wayfinder__polymarket_place_market_order(wallet_label="main", market_slug="bitcoin-above-70k-on-february-9", outcome="YES", side="BUY", buy_amount_pusd=2)`
 
 Lower-level control (CLOB token id + side):
 
@@ -54,6 +54,12 @@ Important: `place_market_order()` semantics:
 - `side="BUY"` → `amount` is **collateral ($) to spend**
 - `side="SELL"` → `amount` is **shares to sell**
 
+Important MCP sizing rule:
+
+- `side="BUY"` → pass `buy_amount_pusd`; this is pUSD spend, not share count.
+- `side="SELL"` → pass `sell_amount_shares`; this is shares to sell.
+- Use returned `executionSummary.sharesFilled`, `executionSummary.collateralSpent`, `executionSummary.collateralReceived`, and `executionSummary.avgPrice` for user-facing math.
+
 ## Selling (cash out)
 
 ```python
@@ -66,7 +72,7 @@ ok, res = await adapter.cash_out_prediction(
 
 MCP shortcut:
 
-- `mcp__wayfinder__polymarket_place_market_order(wallet_label="main", market_slug="...", outcome="...", side="SELL", shares=1)` (pass the full position size from `polymarket_get_state` to fully close)
+- `mcp__wayfinder__polymarket_place_market_order(wallet_label="main", market_slug="...", outcome="...", side="SELL", sell_amount_shares=1)` (pass the full position size from `polymarket_get_state` to fully close)
 
 Practical note (important): after a BUY, there can be a **settlement lag** before shares are sellable. If you’re chaining BUY → SELL in automation, wait for the buy match transaction to confirm (the CLOB response typically includes `transactionsHashes`).
 
