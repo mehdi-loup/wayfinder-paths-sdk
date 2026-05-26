@@ -94,6 +94,8 @@ On Wayfinder Shells instances, all wallets must be remote. Do not create local w
 Always read wallets through MCP tools, not by grepping `config.json` or wallet files.  
 In scripts, use `wayfinder_paths.core.utils.wallets.load_wallets` and `find_wallet_by_label`; they use the same remote-aware path as `core_get_wallets`.
 
+Balance/gas source of truth: for quick wallet or native gas checks, use `core_get_wallets(label="...")`. For Polymarket pUSD or deposit-wallet checks, use `polymarket_get_state(wallet_label="...")`. In scripts, resolve wallets with `load_wallets()` / `find_wallet_by_label()`, then use `BALANCE_CLIENT`, `BalanceAdapter`, or `get_token_balance`. For direct on-chain reads, use `web3_from_chain_id(chain_id)` with `eth_getBalance` or `get_token_balance`; do not hardcode public RPC URLs. Do not use Polygonscan/Etherscan/BscScan/etc. `account`, `balance`, `tokenbalance`, or token-holder APIs for wallet balances or gas checks.
+
 There are two types of wallets:
 
 - Session wallets are recommended for normal trading and have a 15-minute TTL that refreshes while the user has the UI open.
@@ -186,7 +188,7 @@ When a user mentions an outcome or prediction market without naming a venue, sea
 
 For prediction-market edge or forecast requests, use fresh executable pricing as the prior before discussing a trade. Simple one-market checks can use `polymarket_read` directly; delegate to `wayfinder-research` only when the task needs multi-source evidence or resolution analysis.
 
-Before any Polymarket order, show market, outcome, side, size, current executable entry, market-implied prior, posterior range, EV, liquidity/depth, resolution ambiguity, and exact tool inputs. Never use last trade as executable entry or an actionable prior. If the research output lacks `priorSource`, `entryYes`/`entryNo`, posterior range, or decision, rehydrate or ask for a tighter research pass before execution.
+Before any Polymarket order, show market, outcome, side, size, current executable entry, market-implied prior, posterior range, EV, liquidity/depth, resolution ambiguity, and exact tool inputs. For MCP market orders and quotes, BUY uses `buy_amount_pusd` as pUSD spend and SELL uses `sell_amount_shares` as shares to sell; use returned `executionSummary.sharesFilled`, `executionSummary.collateralSpent`, `executionSummary.collateralReceived`, and `executionSummary.avgPrice` for user-facing math. Never describe a BUY spend as the share count. Never use last trade as executable entry or an actionable prior. If the research output lacks `priorSource`, `entryYes`/`entryNo`, posterior range, or decision, rehydrate or ask for a tighter research pass before execution. Evidence-quality gate: do not place or recommend a trade from research marked `partial_early_stop` or `blocked`, `confidence: "low"`, unresolved `openQuestions`, missing disconfirming/source-of-truth checks, or weak/questionable evidence. Ask for a tighter research pass or present `WATCH`/`SKIP`.
 
 ### Token Swap Aggregator
 

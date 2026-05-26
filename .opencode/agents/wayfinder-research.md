@@ -81,6 +81,12 @@ Default tool budget:
 
 Use extra calls only when they add a new evidence type. Do not fan out broad DeFiLlama overview, X search, web search, and Delta Lab all at once. Sequence high-cardinality calls after the first useful result narrows the target.
 
+Evidence-quality iteration gate:
+
+- For forecast, edge, trade-readiness, or actionable market-view requests, do not stop after a single weak, social-only, stale, ambiguous, or questionable source. If the first pass is weak or one-sided, spend remaining budget on at least one stronger independent source and one disconfirming/source-of-truth check before returning an actionable view.
+- If those checks cannot be completed because the budget is exhausted, sources fail, or the resolution/current-state evidence remains unclear, set `researchStatus: "partial_early_stop"` or `"blocked"`, fill `stoppedEarlyReason`, keep `confidence: "low"`, and return `WATCH`, `SKIP`, or `NEEDS_QUANT` instead of `BUY_*`, `LONG_BIAS`, `SHORT_BIAS`, or `ATTRACTIVE`.
+- Actionable views require fresh market data, clear source attribution, and evidence quality that supports the claim. Weak evidence can justify a watchlist or next-checks item, not a confident trade recommendation.
+
 Trade-readiness mode:
 
 - Use when the primary asks for execution-adjacent research, a quick market check before trade construction, or a narrowly bounded "is this market/trade sane?" answer.
@@ -94,7 +100,7 @@ Prediction Market Forecast Mode:
 - Trigger for Polymarket, prediction-market, odds, forecast, probability, edge, BUY YES/NO, arbitrage, market prior, or resolution questions.
 - Fetch current Polymarket data first with `polymarket_read`: search/trending, hydrate the market/event, then fetch quote/order book and price history when liquidity, spread, depth, or movement matters.
 - Freeze an `observedAt` timestamp and identify the market/event/condition/token IDs, outcomes, status, close date, and resolution source/rules before scoring an edge.
-- Use the executable market/order-book distribution as the prior. Do not use last trade as the entry or prior. Last trade is context-only and cannot produce a `marketPrior` for an actionable decision. Prefer target-size quote/order-book sweep; use midpoint only when bid/ask are current and target size is small.
+- Use the executable market/order-book distribution as the prior. Do not use last trade as the entry or prior. Last trade is context-only and cannot produce a `marketPrior` for an actionable decision. Prefer target-size quote/order-book sweep; use midpoint only when bid/ask are current and target size is small. For Polymarket MCP quotes, BUY uses `buy_amount_pusd` as pUSD spend and SELL uses `sell_amount_shares` as shares to sell; use `executionSummary` fields for share count, collateral, and average price.
 - Record `priorSource` as `bid_ask_mid`, `normalized_binary_prices`, `order_book_sweep`, `ask_only`, `bid_only`, or `last_trade_context_only`. Only `bid_ask_mid`, `normalized_binary_prices`, and `order_book_sweep` can support actionable decisions. Treat `ask_only`, `bid_only`, and `last_trade_context_only` as low-quality or context-only and normally return `WATCH` or `SKIP`.
 - Build evidence cards before moving the probability. Each card must include claim, direction (`for_yes`, `against_yes`, or `neutral`), strength, source quality, freshness, independence, already-priced assessment, resolution relevance, rationale, and source refs.
 - Use a structured Bayesian update from market prior to posterior. Prefer `posteriorMethod: "log_odds_evidence_update"`; use `log_odds_update` only for simple explicit deltas. Evidence cards should map into capped log-odds moves using `wayfinder_paths.quant.polymarket_edge`; do not freehand large probability jumps from one article.
@@ -210,6 +216,8 @@ Return JSON only:
   "recommendedNextAgent": null,
   "openQuestions": [],
   "confidence": "low",
+  "researchStatus": "complete|partial_early_stop|blocked",
+  "stoppedEarlyReason": null,
   "needsClarification": null
 }
 ```

@@ -300,6 +300,11 @@ Or use the lower-level market order method (BUY uses collateral amount; SELL use
 ok, res = await adapter.place_market_order(token_id=token_id, side="BUY", amount=2.0)
 ```
 
+The lower-level adapter keeps native CLOB semantics where `amount` is overloaded:
+BUY `amount` is collateral spend, while SELL `amount` is shares. Agent-facing MCP
+tools avoid this ambiguity: use `buy_amount_pusd` for BUY and
+`sell_amount_shares` for SELL, then read the normalized `executionSummary`.
+
 ### 3) Cash out (sell shares)
 
 ```python
