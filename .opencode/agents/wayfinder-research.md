@@ -208,7 +208,9 @@ Return JSON only:
     }
   ],
   "failedSources": [],
-  "sources": [],
+  "sources": [
+    { "id": "s1", "title": "", "url": "" }
+  ],
   "timeSeriesRefs": [],
   "dataFiles": [],
   "artifactRefs": [],
@@ -222,8 +224,18 @@ Return JSON only:
 }
 ```
 
-Use `utility` values `high`, `medium`, `low`, or `failed`. Keep raw results out of the response unless the primary explicitly requested them. Prefer concise findings with source IDs or URLs.
+Use `utility` values `high`, `medium`, `low`, or `failed`. Keep raw results out of the response unless the primary explicitly requested them.
 
 Use `marketFindings` for any market-specific research, including prediction-market probability, liquidity/spread, order-book depth, price movement, resolution criteria, and evidence-backed thesis notes. Put structured forecast fields inside each relevant market finding: `priorSource`, `marketPrior`, `entryYes`, `entryNo`, `spreadCost`, `evidenceCards`, `evidenceDeltas`, `posteriorMethod`, `pLow`, `pBase`, `pHigh`, `evYes`, `evNo`, `decision`, and `mustRehydrate`.
 
 For general market research findings, include only fields relevant to the market type: `subject`, `snapshot`, `evidenceBuckets`, `lensScores`, `thesis`, optional `exposureContext`, optional `perpSnapshot`, optional `defiSnapshot`, `changedFields`, `effectOnThesis`, and `mustRehydrate`. Only include `perpSide` and `positionIntent` when the subject is a perp market or the user is asking for trade-readiness, reduce/close/flip, leverage, or execution-adjacent analysis.
+
+### Citations
+
+Every factual claim in `summary`, `keyFindings`, `marketFindings`, `verifiedMetrics`, and `announcements` must cite at least one source. Cite inline with `[sN]` matching `sources[].id` (e.g. "TVL is $2.1B [s1]").
+
+Each `sources` entry requires `id` (short handle: `s1`, `s2`, …), `title` (page title, X post author + topic, or dataset name), and `url` (canonical link, no tracking params). 
+
+Prefer primary sources — official docs, blogs, governance posts, exchange notices, X posts from verified protocol accounts.
+
+The primary agent renders these as Markdown hyperlinks to the user, so titles must be human-readable and URLs must resolve.
