@@ -323,7 +323,7 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "openQuestions" in research
     assert "Standard task: 6-8 calls" in research
     assert "Deep task: 8-12 calls" in research
-    assert "Hard cap at 5-6 calls" in research
+    assert "Hard cap at 6-8 calls" in research
     assert "Evidence-quality iteration gate" in research
     assert "partial_early_stop" in research
     assert "stoppedEarlyReason" in research
