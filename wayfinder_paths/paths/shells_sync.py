@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from loguru import logger
 
 from wayfinder_paths.core.config import (
@@ -98,7 +99,7 @@ def sync_shells_inventory(
             lockfile_present=lockfile_present,
             paths=paths,
         )
-    except PathsApiError as exc:
+    except (PathsApiError, httpx.HTTPError) as exc:
         logger.debug("Shells inventory sync skipped after API error: {}", exc)
         return ShellsInventorySyncResult(
             status="error",

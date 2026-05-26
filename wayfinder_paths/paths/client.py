@@ -387,7 +387,12 @@ class PathsApiClient:
         to the BE-side polling daemon (catch-all)."""
         url = f"{self.base_url}/api/v1/opencode/instances/{app_name}/inventory-sync/"
         body = {"lockfile_present": lockfile_present, "paths": paths}
-        resp = self._client.post(url, json=body, headers=self._headers())
+        resp = self._client.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=httpx.Timeout(5.0),
+        )
         if resp.status_code >= 400:
             raise PathsApiError(
                 f"Shells inventory sync failed ({resp.status_code}): {resp.text}"
