@@ -71,7 +71,7 @@ def test_mcp_catalog_exposes_expected_non_shell_tools() -> None:
     assert "polymarket_place_market_order" in names
     assert "polymarket_deposit_pusd" in names
     assert "contracts_deploy" in names
-    assert "shells_create_chart" not in names
+    assert "visual_create_chart" not in names
 
 
 def test_mcp_catalog_exposes_shells_tools_in_opencode(monkeypatch) -> None:
@@ -79,10 +79,11 @@ def test_mcp_catalog_exposes_shells_tools_in_opencode(monkeypatch) -> None:
 
     names = _tool_names(mcp_server.build_mcp())
 
-    assert "shells_get_frontend_context" in names
-    assert "shells_set_active_market" in names
-    assert "shells_create_chart" in names
-    assert "shells_notify" in names
+    assert "visual_get_frontend_context" in names
+    assert "visual_set_active_market" in names
+    assert "visual_create_chart" in names
+    assert "visual_import_chart_spec" in names
+    assert "notification_send" in names
 
 
 def test_opencode_agents_scope_single_mcp_tool_names() -> None:
@@ -97,13 +98,27 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert primary["wayfinder_hyperliquid_*"] == "allow"
     assert primary["wayfinder_polymarket_*"] == "allow"
     assert primary["wayfinder_contracts_*"] == "allow"
-    assert "wayfinder_research_*" not in primary
+    assert primary["wayfinder_visual_*"] == "deny"
+    assert primary["wayfinder_visual_get_frontend_context"] == "allow"
+    assert primary["wayfinder_visual_set_active_market"] == "allow"
+    assert primary["wayfinder_visual_search_chart_series"] == "allow"
+    assert primary["wayfinder_visual_add_workspace_chart_annotation"] == "allow"
+    assert primary["wayfinder_visual_add_workspace_chart_overlay"] == "allow"
+    assert "wayfinder_visual_create_chart" not in primary
+    assert "wayfinder_visual_import_chart_spec" not in primary
+    assert primary["wayfinder_notification_send"] == "allow"
+    assert primary["wayfinder_research_*"] == "deny"
     assert primary["wayfinder_core_run_script"] == "ask"
     assert primary["wayfinder_onchain_swap"] == "ask"
     assert primary["wayfinder_onchain_send"] == "ask"
     assert primary["wayfinder_contracts_execute"] == "ask"
     _assert_rule_order(primary, "wayfinder_*", "wayfinder_core_*")
     _assert_rule_order(primary, "wayfinder_core_*", "wayfinder_core_run_script")
+    _assert_rule_order(
+        primary,
+        "wayfinder_visual_*",
+        "wayfinder_visual_get_frontend_context",
+    )
     _assert_rule_order(
         primary,
         "wayfinder_hyperliquid_*",
@@ -128,14 +143,17 @@ def test_opencode_agents_scope_single_mcp_tool_names() -> None:
     assert quant["wayfinder_core_run_script"] == "allow"
     assert quant["wayfinder_core_web_search"] == "allow"
     assert quant["wayfinder_core_web_fetch"] == "allow"
+    assert quant["wayfinder_polymarket_read"] == "allow"
+    assert "wayfinder_polymarket_place_*" not in quant
     _assert_rule_order(quant, "wayfinder_*", "wayfinder_research_*")
+    _assert_rule_order(quant, "wayfinder_*", "wayfinder_polymarket_read")
 
     assert visual["wayfinder_*"] == "deny"
-    assert visual["wayfinder_shells_*"] == "allow"
+    assert visual["wayfinder_visual_*"] == "allow"
     assert visual["wayfinder_core_run_script"] == "allow"
     assert visual["wayfinder_core_web_search"] == "allow"
     assert visual["wayfinder_core_web_fetch"] == "allow"
-    _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
+    _assert_rule_order(visual, "wayfinder_*", "wayfinder_visual_*")
 
 
 def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
@@ -149,6 +167,14 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_hyperliquid_*": "allow",
         "wayfinder_polymarket_*": "allow",
         "wayfinder_contracts_*": "allow",
+        "wayfinder_visual_*": "deny",
+        "wayfinder_visual_get_frontend_context": "allow",
+        "wayfinder_visual_set_active_market": "allow",
+        "wayfinder_visual_search_chart_series": "allow",
+        "wayfinder_visual_add_workspace_chart_annotation": "allow",
+        "wayfinder_visual_add_workspace_chart_overlay": "allow",
+        "wayfinder_notification_send": "allow",
+        "wayfinder_research_*": "deny",
         "wayfinder_core_run_script": "ask",
         "wayfinder_core_run_strategy": "ask",
         "wayfinder_core_runner": "ask",
@@ -170,6 +196,11 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
     _assert_rule_order(primary, "wayfinder_*", "wayfinder_core_*")
     _assert_rule_order(primary, "wayfinder_core_*", "wayfinder_core_run_script")
     _assert_rule_order(primary, "wayfinder_contracts_*", "wayfinder_contracts_deploy")
+    _assert_rule_order(
+        primary,
+        "wayfinder_visual_*",
+        "wayfinder_visual_search_chart_series",
+    )
 
     research_frontmatter = _agent_frontmatter("wayfinder-research")
     assert "tools" not in research_frontmatter
@@ -200,8 +231,10 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         "wayfinder_core_run_script": "allow",
         "wayfinder_core_web_search": "allow",
         "wayfinder_core_web_fetch": "allow",
+        "wayfinder_polymarket_read": "allow",
     }
     _assert_rule_order(quant, "wayfinder_*", "wayfinder_research_*")
+    _assert_rule_order(quant, "wayfinder_*", "wayfinder_polymarket_read")
 
     visual_frontmatter = _agent_frontmatter("wayfinder-visual")
     assert "tools" not in visual_frontmatter
@@ -210,25 +243,46 @@ def test_opencode_agent_frontmatter_scopes_visible_wayfinder_tools() -> None:
         key: value for key, value in visual.items() if key.startswith("wayfinder_")
     } == {
         "wayfinder_*": "deny",
-        "wayfinder_shells_*": "allow",
+        "wayfinder_visual_*": "allow",
         "wayfinder_core_run_script": "allow",
         "wayfinder_core_web_search": "allow",
         "wayfinder_core_web_fetch": "allow",
     }
-    _assert_rule_order(visual, "wayfinder_*", "wayfinder_shells_*")
+    _assert_rule_order(visual, "wayfinder_*", "wayfinder_visual_*")
 
 
 def test_opencode_agents_route_simple_onchain_token_charts_without_quant() -> None:
     primary = _agent_text("wayfinder")
     visual = _agent_text("wayfinder-visual")
 
+    assert "Chart Fast Path" in primary
+    assert "visual_get_frontend_context" in primary
+    assert "visual_set_active_market" in primary
+    assert "visual_search_chart_series" in primary
     assert "Do not call `wayfinder-quant`" in primary
     assert "simple iteration" in primary
 
     assert "Single-token chart fast path" in visual
     assert 'market_type="onchain-spot"' in visual
-    assert "Do not call `shells_search_chart_series`" in visual
+    assert "Do not call `visual_search_chart_series`" in visual
     assert "do not substitute a speculative perp or funding series" in visual
+
+
+def test_visual_agent_prefers_source_refs_and_importable_specs() -> None:
+    visual = _agent_text("wayfinder-visual")
+    quant = _agent_text("wayfinder-quant")
+
+    assert "Source References First" in visual
+    assert "delta_lab.asset.lending" in visual
+    assert '"market_id":17694' in visual
+    assert '"asset_id":163' in visual
+    assert "delta_lab.asset.funding" in visual
+    assert '"instrument_id":163' in visual
+    assert "visual_import_chart_spec" in visual
+    assert ".wayfinder_runs/visual_specs" in visual
+    assert "Empty task results are forbidden" in visual
+
+    assert "Do not take over normal source-backed charting" in quant
 
 
 def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
@@ -243,7 +297,64 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "use `polymarket_read` first" in research
     assert "After two failed attempts" in research
     assert "Prediction-market research" in research
-    assert 'Do not create a separate schema for "edge" analysis' in research
+    assert "Prediction Market Forecast Mode" in research
+    assert "priorSource" in research
+    assert "Last trade is context-only" in research
+    assert "bid_ask_mid" in research
+    assert "normalized_binary_prices" in research
+    assert "order_book_sweep" in research
+    assert "last_trade_context_only" in research
+    assert "log_odds_update" in research
+    assert "log_odds_evidence_update" in research
+    assert "Build evidence cards" in research
+    assert "evidenceDeltas" in research
+    assert "evidenceCards" in research
+    assert "conservative EV" in research
+    assert "quote_update" in research
+    assert "parentId" in research
+    assert "relatedLogIds" in research
+    assert "Market Research / Thesis Mode" in research
+    assert "quick lookups" in research
+    assert "do not force a thesis" in research
+    assert "snapshot checks" in research
+    assert "DeFi protocols" in research
+    assert "yield routes" in research
+    assert "perpSide" in research
+    assert "positionIntent" in research
+    assert "Only include `perpSide` and `positionIntent`" in research
+    assert "changedFields" in research
+    assert "effectOnThesis" in research
+
+
+def test_market_intelligence_agent_prompt_contracts() -> None:
+    primary = _agent_text("wayfinder")
+    research = _agent_text("wayfinder-research")
+    quant = _agent_text("wayfinder-quant")
+
+    assert _agent_frontmatter("wayfinder-research")["temperature"] == 0.1
+    assert _agent_frontmatter("wayfinder-quant")["temperature"] == 0.1
+
+    assert "executable market/order-book distribution as the prior" in primary
+    assert "Market Intelligence Modes" in primary
+    assert "quote/snapshot updates" in primary
+    assert "audit_only" in primary
+    assert "relatedLogIds" in primary
+    assert "exact tool inputs" in primary
+
+    assert "Prediction Market Forecast Mode" in research
+    assert "Use the executable market/order-book distribution as the prior" in research
+    assert "stale log entries" in research
+    assert "Market intelligence log" in research
+    assert "Do not log every tool call" in research
+    assert "logRefs" in research
+    assert "artifactRefs" in research
+
+    assert "Market Quant Mode" in quant
+    assert "wayfinder_paths.quant.polymarket_edge" in quant
+    assert "hypothesis seeds only" in quant
+    assert "positive funding means longs pay shorts" in quant
+    assert "RESEARCH_ONLY" in quant
+    assert "DO_NOT_TRADE" in quant
 
 
 def test_hidden_opencode_subagents_do_not_emit_user_suggestions() -> None:
