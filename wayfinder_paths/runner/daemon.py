@@ -163,7 +163,6 @@ class RunnerDaemon:
 
         self._control = None
         self._daemon_log_sink_id: int | None = None
-        self._sync_dirty = True
 
     @property
     def paths(self) -> RunnerPaths:
@@ -385,10 +384,6 @@ class RunnerDaemon:
                 "log_output": log_output,
             },
         )
-        self._mark_sync_dirty()
-
-    def _mark_sync_dirty(self) -> None:
-        self._sync_dirty = True
 
     def _bind_runner_session_async(self, name: str) -> None:
         if not is_opencode_instance():
@@ -408,7 +403,6 @@ class RunnerDaemon:
             payload["notify_session_id"] = session_id
             self._db.update_job(name=name, payload=payload, interval_seconds=None)
             logger.info(f"Auto-bound job {name} to session {session_id}")
-            self._mark_sync_dirty()
 
         self._run_side_effect(f"bind-runner-session-{name}", _bind)
 
@@ -418,11 +412,10 @@ class RunnerDaemon:
 
         def _loop() -> None:
             while not self._shutdown.is_set():
-                if self._sync_dirty:
-                    try:
-                        self._bulk_sync_to_backend()
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug(f"Periodic job sync failed: {exc}")
+                try:
+                    self._bulk_sync_to_backend()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"Periodic job sync failed: {exc}")
                 self._shutdown.wait(30)
 
         thread = threading.Thread(target=_loop, name="wayfinder-job-sync", daemon=True)
@@ -437,15 +430,16 @@ class RunnerDaemon:
                 job, state = self._db.get_job(name=j["name"])
             except KeyError:
                 continue
-            jobs.append({
-                "job_name": job.name,
-                "job_type": job.type,
-                "status": state.status,
-                "interval_seconds": job.interval_seconds,
-                "payload": job.payload,
-            })
+            jobs.append(
+                {
+                    "job_name": job.name,
+                    "job_type": job.type,
+                    "status": state.status,
+                    "interval_seconds": job.interval_seconds,
+                    "payload": job.payload,
+                }
+            )
         SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
-        self._sync_dirty = False
 
     def _notify_session(
         self,
@@ -831,7 +825,7 @@ class RunnerDaemon:
             return {"ok": False, "error": str(exc)}
         if session_id is None:
             self._bind_runner_session_async(name)
-        self._mark_sync_dirty()
+
         return {"ok": True, "result": {"job_id": job_id, "name": name}}
 
     def ctl_update_job(
@@ -843,7 +837,7 @@ class RunnerDaemon:
             self._db.update_job(
                 name=name, payload=payload, interval_seconds=interval_seconds
             )
-            self._mark_sync_dirty()
+
             return {"ok": True, "result": {"name": name}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -851,7 +845,7 @@ class RunnerDaemon:
     def ctl_pause_job(self, *, name: str) -> dict[str, Any]:
         try:
             self._db.set_job_status(name=name, status=JobStatus.PAUSED)
-            self._mark_sync_dirty()
+
             return {"ok": True, "result": {"name": name, "status": JobStatus.PAUSED}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -861,7 +855,7 @@ class RunnerDaemon:
             job, _ = self._db.get_job(name=name)
             self._db.set_job_status(name=name, status=JobStatus.ACTIVE)
             self._db.set_next_run_at(job_id=job.id, next_run_at=_utc_epoch_s())
-            self._mark_sync_dirty()
+
             return {"ok": True, "result": {"name": name, "status": JobStatus.ACTIVE}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -944,5 +938,4 @@ class RunnerDaemon:
                 return {"ok": False, "error": str(exc)}
             self._running_by_job.pop(job_id, None)
 
-        self._mark_sync_dirty()
         return {"ok": True, "result": {"name": str(name), "deleted": True}}
