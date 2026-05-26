@@ -242,7 +242,7 @@ core_runner(action="daemon_stop")
 
 #### Conversation Noise
 
-By default failing jobs, timed out jobs, and stdout with WAYFINDER_JOB_RESULT will emit a chat message under the user back to the chat - this EXCLUDES successful job run results by default. If you wish to have successful job run logs entering the main conversation please set always_notify_session_on_job_completion=True.
+By default: failing jobs, timed out jobs, and stdout messages with the string WAYFINDER_JOB_RESULT will emit a chat message under the user back to the chat - NOTE THIS EXCLUDES successful job run results by default. If you wish to have successful job run logs entering the main conversation please set `always_notify_session_on_job_completion`=True.
 
 WAYFINDER_JOB_RESULT should be used for exceptions, bad arguments OR significant events:
 
