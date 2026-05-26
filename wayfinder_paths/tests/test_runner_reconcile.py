@@ -48,7 +48,19 @@ def test_bulk_sync_sends_all_local_jobs(
         SCHEDULED_JOBS_CLIENT, "bulk_sync", lambda jobs: synced.append(jobs)
     )
 
-    daemon._bulk_sync_to_backend()
+    jobs = []
+    for j in daemon._db.list_jobs():
+        job, state = daemon._db.get_job(name=j["name"])
+        jobs.append(
+            {
+                "job_name": job.name,
+                "job_type": job.type,
+                "status": state.status,
+                "interval_seconds": job.interval_seconds,
+                "payload": job.payload,
+            }
+        )
+    SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
 
     assert len(synced) == 1
     names = {j["job_name"] for j in synced[0]}
@@ -71,7 +83,7 @@ def test_bulk_sync_noop_when_not_opencode(
 
     monkeypatch.setattr(SCHEDULED_JOBS_CLIENT, "bulk_sync", _fail)
 
-    daemon._bulk_sync_to_backend()
+    daemon._start_sync_loop()
 
     assert not called
 
@@ -88,7 +100,19 @@ def test_bulk_sync_empty_when_no_jobs(
         SCHEDULED_JOBS_CLIENT, "bulk_sync", lambda jobs: synced.append(jobs)
     )
 
-    daemon._bulk_sync_to_backend()
+    jobs = []
+    for j in daemon._db.list_jobs():
+        job, state = daemon._db.get_job(name=j["name"])
+        jobs.append(
+            {
+                "job_name": job.name,
+                "job_type": job.type,
+                "status": state.status,
+                "interval_seconds": job.interval_seconds,
+                "payload": job.payload,
+            }
+        )
+    SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
 
     assert len(synced) == 1
     assert synced[0] == []

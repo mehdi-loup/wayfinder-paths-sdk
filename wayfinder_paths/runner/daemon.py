@@ -413,33 +413,28 @@ class RunnerDaemon:
         def _loop() -> None:
             while not self._shutdown.is_set():
                 try:
-                    self._bulk_sync_to_backend()
+                    jobs = []
+                    for j in self._db.list_jobs():
+                        try:
+                            job, state = self._db.get_job(name=j["name"])
+                        except KeyError:
+                            continue
+                        jobs.append(
+                            {
+                                "job_name": job.name,
+                                "job_type": job.type,
+                                "status": state.status,
+                                "interval_seconds": job.interval_seconds,
+                                "payload": job.payload,
+                            }
+                        )
+                    SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
                 except Exception as exc:  # noqa: BLE001
                     logger.debug(f"Periodic job sync failed: {exc}")
                 self._shutdown.wait(30)
 
         thread = threading.Thread(target=_loop, name="wayfinder-job-sync", daemon=True)
         thread.start()
-
-    def _bulk_sync_to_backend(self) -> None:
-        if not is_opencode_instance():
-            return
-        jobs = []
-        for j in self._db.list_jobs():
-            try:
-                job, state = self._db.get_job(name=j["name"])
-            except KeyError:
-                continue
-            jobs.append(
-                {
-                    "job_name": job.name,
-                    "job_type": job.type,
-                    "status": state.status,
-                    "interval_seconds": job.interval_seconds,
-                    "payload": job.payload,
-                }
-            )
-        SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
 
     def _notify_session(
         self,
