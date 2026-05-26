@@ -54,13 +54,192 @@ async def test_polymarket_search_uses_adapter_search():
         patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
         patch(
             "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.search_markets",
-            new=AsyncMock(return_value=(True, [{"slug": "m1"}])),
+            new=AsyncMock(
+                return_value=(
+                    True,
+                    [
+                        {
+                            "slug": "m1",
+                            "eventSlug": "e1",
+                            "question": "Will BTC rally?",
+                            "yesPrice": 0.42,
+                            "noPrice": 0.58,
+                            "yesTokenId": "tok_yes",
+                            "noTokenId": "tok_no",
+                            "conditionId": "0xabc",
+                            "liquidity": 1234.0,
+                            "volume24h": 5678.0,
+                            "resolvesAt": "2026-06-01T00:00:00Z",
+                        }
+                    ],
+                )
+            ),
         ),
     ):
         out = await polymarket_read("search", query="bitcoin", limit=1)
         assert out["ok"] is True
         assert out["result"]["action"] == "search"
-        assert out["result"]["markets"][0]["slug"] == "m1"
+        assert out["result"]["summaryMode"] is True
+        assert "markets" not in out["result"]
+        candidate = out["result"]["candidates"][0]
+        assert candidate["slug"] == "m1"
+        assert candidate["outcomes"][0] == {
+            "label": "Yes",
+            "price": 0.42,
+            "tokenId": "tok_yes",
+        }
+        assert candidate["outcomes"][1]["tokenId"] == "tok_no"
+        assert out["result"]["truncation"]["rawAvailableWithSummaryFalse"] is True
+
+
+@pytest.mark.asyncio
+async def test_polymarket_search_summary_false_preserves_raw_markets():
+    with (
+        patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
+        patch(
+            "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.search_markets",
+            new=AsyncMock(return_value=(True, [{"slug": "m1", "raw": True}])),
+        ),
+    ):
+        out = await polymarket_read("search", query="bitcoin", limit=1, summary=False)
+        assert out["ok"] is True
+        assert "summaryMode" not in out["result"]
+        assert out["result"]["markets"] == [{"slug": "m1", "raw": True}]
+
+
+@pytest.mark.asyncio
+async def test_polymarket_get_event_summary_returns_compact_candidates():
+    event = {
+        "slug": "world-cup-winner",
+        "title": "World Cup winner",
+        "description": "Pick the tournament winner.",
+        "markets": [
+            {
+                "slug": "closed-world-cup-market",
+                "question": "Closed market",
+                "outcomes": ["Yes", "No"],
+                "outcomePrices": [1.0, 0.0],
+                "clobTokenIds": ["tok_closed_yes", "tok_closed_no"],
+                "enableOrderBook": True,
+                "acceptingOrders": False,
+                "active": True,
+                "closed": True,
+                "liquidityNum": "999999.99",
+                "volume24hr": "999999.99",
+            },
+            {
+                "slug": "world-cup-winner-2026",
+                "question": "Who will win the 2026 World Cup?",
+                "outcomes": ["Brazil", "France", "Spain"],
+                "outcomePrices": [0.25, 0.2, 0.12],
+                "clobTokenIds": ["tok_brazil", "tok_france", "tok_spain"],
+                "conditionId": "0xcond1",
+                "enableOrderBook": True,
+                "acceptingOrders": True,
+                "active": True,
+                "closed": False,
+                "liquidityNum": "12345.67",
+                "volume24hr": "987.65",
+                "endDate": "2026-07-19T00:00:00Z",
+                "rawLargeField": {"should": "not appear"},
+            },
+            {
+                "slug": "other-world-cup-market",
+                "question": "Another market",
+                "outcomes": ["Yes", "No"],
+                "outcomePrices": [0.5, 0.5],
+                "clobTokenIds": ["tok_yes", "tok_no"],
+            },
+        ],
+    }
+    with (
+        patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
+        patch(
+            "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.get_event_by_slug",
+            new=AsyncMock(return_value=(True, event)),
+        ),
+    ):
+        out = await polymarket_read(
+            "get_event", event_slug="world-cup-winner", candidate_limit=1
+        )
+
+    assert out["ok"] is True
+    result = out["result"]
+    assert result["summaryMode"] is True
+    assert result["event"] == {
+        "slug": "world-cup-winner",
+        "title": "World Cup winner",
+        "description": "Pick the tournament winner.",
+        "startDate": None,
+        "endDate": None,
+        "active": None,
+        "closed": None,
+    }
+    assert "markets" not in result["event"]
+    assert result["truncation"] == {
+        "totalAvailable": 3,
+        "returnedCandidates": 1,
+        "truncated": True,
+        "rawAvailableWithSummaryFalse": True,
+    }
+    candidate = result["candidates"][0]
+    assert candidate["slug"] == "world-cup-winner-2026"
+    assert candidate["eventSlug"] == "world-cup-winner"
+    assert candidate["outcomes"] == [
+        {"label": "Brazil", "price": 0.25, "tokenId": "tok_brazil"},
+        {"label": "France", "price": 0.2, "tokenId": "tok_france"},
+        {"label": "Spain", "price": 0.12, "tokenId": "tok_spain"},
+    ]
+    assert candidate["liquidity"] == 12345.67
+    assert candidate["tradable"] is True
+    assert "rawLargeField" not in candidate
+
+
+@pytest.mark.asyncio
+async def test_polymarket_get_event_summary_false_preserves_raw_event():
+    event = {"slug": "event", "markets": [{"slug": "m1", "raw": True}]}
+    with (
+        patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
+        patch(
+            "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.get_event_by_slug",
+            new=AsyncMock(return_value=(True, event)),
+        ),
+    ):
+        out = await polymarket_read("get_event", event_slug="event", summary=False)
+    assert out["ok"] is True
+    assert out["result"]["event"] == event
+
+
+@pytest.mark.asyncio
+async def test_polymarket_get_market_summary_and_raw_modes():
+    market = {
+        "slug": "market",
+        "question": "Will it happen?",
+        "description": "Resolution text " * 80,
+        "resolutionSource": "https://example.com/rules",
+        "outcomes": ["Yes", "No"],
+        "outcomePrices": [0.4, 0.6],
+        "clobTokenIds": ["tok_yes", "tok_no"],
+        "conditionId": "0xcond",
+        "raw": {"nested": True},
+    }
+    with (
+        patch("wayfinder_paths.mcp.tools.polymarket.CONFIG", {}),
+        patch(
+            "wayfinder_paths.mcp.tools.polymarket.PolymarketAdapter.get_market_by_slug",
+            new=AsyncMock(return_value=(True, market)),
+        ),
+    ):
+        summary = await polymarket_read("get_market", market_slug="market")
+        raw = await polymarket_read("get_market", market_slug="market", summary=False)
+
+    assert summary["ok"] is True
+    assert summary["result"]["summaryMode"] is True
+    assert summary["result"]["market"]["outcomes"][0]["tokenId"] == "tok_yes"
+    assert len(summary["result"]["market"]["description"]) < len(market["description"])
+    assert "raw" not in summary["result"]["market"]
+    assert raw["ok"] is True
+    assert raw["result"]["market"] == market
 
 
 @pytest.mark.asyncio

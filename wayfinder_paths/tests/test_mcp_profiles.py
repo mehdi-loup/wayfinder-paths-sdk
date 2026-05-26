@@ -313,6 +313,9 @@ def test_opencode_agents_route_research_and_polymarket_tasks() -> None:
     assert "quote_update" in research
     assert "parentId" in research
     assert "relatedLogIds" in research
+    assert "Evidence-quality iteration gate" in research
+    assert "partial_early_stop" in research
+    assert "stoppedEarlyReason" in research
     assert "Market Research / Thesis Mode" in research
     assert "quick lookups" in research
     assert "do not force a thesis" in research
@@ -340,6 +343,14 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "audit_only" in primary
     assert "relatedLogIds" in primary
     assert "exact tool inputs" in primary
+    assert "Balance/gas source of truth" in primary
+    assert 'core_get_wallets(label="...")' in primary
+    assert 'polymarket_get_state(wallet_label="...")' in primary
+    assert "web3_from_chain_id(chain_id)" in primary
+    assert "Do not use Polygonscan/Etherscan/BscScan/etc." in primary
+    assert "Evidence-quality gate" in primary
+    assert "partial_early_stop" in primary
+    assert "weak/questionable evidence" in primary
 
     assert "Prediction Market Forecast Mode" in research
     assert "Use the executable market/order-book distribution as the prior" in research
@@ -348,6 +359,8 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "Do not log every tool call" in research
     assert "logRefs" in research
     assert "artifactRefs" in research
+    assert "researchStatus" in research
+    assert "stoppedEarlyReason" in research
 
     assert "Market Quant Mode" in quant
     assert "wayfinder_paths.quant.polymarket_edge" in quant
@@ -355,6 +368,25 @@ def test_market_intelligence_agent_prompt_contracts() -> None:
     assert "positive funding means longs pay shorts" in quant
     assert "RESEARCH_ONLY" in quant
     assert "DO_NOT_TRADE" in quant
+
+
+def test_polymarket_deposit_wallet_skill_documents_async_boundaries() -> None:
+    text = (
+        SDK_ROOT
+        / ".claude"
+        / "skills"
+        / "using-polymarket-adapter"
+        / "rules"
+        / "deposit-wallet.md"
+    ).read_text(encoding="utf-8")
+
+    assert "`adapter.deposit_wallet_address()` — **sync**" in text
+    assert "Do not `await` it" in text
+    assert "`await adapter.fund_deposit_wallet(amount_raw=int)` — **async**" in text
+    assert (
+        "`await adapter.withdraw_deposit_wallet(amount_raw=int | None)` — **async**"
+        in text
+    )
 
 
 def test_hidden_opencode_subagents_do_not_emit_user_suggestions() -> None:

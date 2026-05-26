@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -32,85 +33,221 @@ from wayfinder_paths.mcp.utils import (
     throw_if_not_number,
 )
 
-_TRIM_MARKET_FIELDS: set[str] = {
-    "id",
-    "questionID",
-    "image",
-    "icon",
-    "resolutionSource",
-    "startDate",
-    "startDateIso",
-    "createdAt",
-    "updatedAt",
-    "marketMakerAddress",
-    "new",
-    "featured",
-    "submitted_by",
-    "archived",
-    "resolvedBy",
-    "restricted",
-    "groupItemThreshold",
-    "enableOrderBook",
-    "hasReviewedDates",
-    "volumeNum",
-    "liquidityNum",
-    "volume1wk",
-    "volume1mo",
-    "volume1yr",
-    "volume24hrClob",
-    "volume1wkClob",
-    "volume1moClob",
-    "volume1yrClob",
-    "volumeClob",
-    "liquidityClob",
-    "umaBond",
-    "umaReward",
-    "umaResolutionStatus",
-    "umaResolutionStatuses",
-    "customLiveness",
-    "negRisk",
-    "negRiskMarketID",
-    "negRiskRequestID",
-    "ready",
-    "funded",
-    "acceptingOrdersTimestamp",
-    "cyom",
-    "competitive",
-    "pagerDutyNotificationEnabled",
-    "approved",
-    "clobRewards",
-    "rewardsMinSize",
-    "rewardsMaxSpread",
-    "automaticallyActive",
-    "clearBookOnStart",
-    "seriesColor",
-    "showGmpSeries",
-    "showGmpOutcome",
-    "manualActivation",
-    "negRiskOther",
-    "pendingDeployment",
-    "deploying",
-    "deployingTimestamp",
-    "rfqEnabled",
-    "holdingRewardsEnabled",
-    "feesEnabled",
-    "requiresTranslation",
-    "oneWeekPriceChange",
-    "oneMonthPriceChange",
-    "oneHourPriceChange",
-}
+
+def _compact_truncation(total: int, returned: int) -> dict[str, Any]:
+    return {
+        "totalAvailable": total,
+        "returnedCandidates": returned,
+        "truncated": total > returned,
+        "rawAvailableWithSummaryFalse": True,
+    }
 
 
-def _trim_market(m: dict[str, Any]) -> dict[str, Any]:
-    out = {k: v for k, v in m.items() if k not in _TRIM_MARKET_FIELDS}
-    desc = out.get("description") or ""
-    if len(desc) > 300:
-        out["description"] = desc[:300] + "…"
-    if "events" in out:
-        evt = out.pop("events")
-        if evt:
-            out["_event"] = {"slug": evt[0].get("slug"), "title": evt[0].get("title")}
-    return out
+def _compact_text(value: Any, *, max_chars: int = 700) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text if len(text) <= max_chars else text[: max_chars - 1] + "…"
+
+
+def _maybe_json_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return [value]
+        return decoded if isinstance(decoded, list) else [decoded]
+    return [value]
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _first_present(market: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = market.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _event_slug(market: dict[str, Any]) -> str | None:
+    direct = _first_present(market, "eventSlug", "event_slug")
+    if direct:
+        return str(direct)
+    event = market.get("_event")
+    if isinstance(event, dict) and event.get("slug"):
+        return str(event["slug"])
+    events = market.get("events")
+    if isinstance(events, list) and events and isinstance(events[0], dict):
+        slug = events[0].get("slug")
+        return str(slug) if slug else None
+    return None
+
+
+def _compact_outcomes(market: dict[str, Any]) -> list[dict[str, Any]]:
+    if market.get("yesTokenId") or market.get("noTokenId"):
+        return [
+            {
+                "label": str(market.get("yesLabel") or "Yes"),
+                "price": _as_float(market.get("yesPrice")),
+                "tokenId": market.get("yesTokenId"),
+            },
+            {
+                "label": str(market.get("noLabel") or "No"),
+                "price": _as_float(market.get("noPrice")),
+                "tokenId": market.get("noTokenId"),
+            },
+        ]
+
+    labels = _maybe_json_list(market.get("outcomes"))
+    prices = _maybe_json_list(market.get("outcomePrices"))
+    token_ids = _maybe_json_list(market.get("clobTokenIds"))
+    count = max(len(labels), len(prices), len(token_ids))
+    outcomes: list[dict[str, Any]] = []
+    for idx in range(count):
+        label = labels[idx] if idx < len(labels) else idx
+        outcomes.append(
+            {
+                "label": str(label),
+                "price": _as_float(prices[idx] if idx < len(prices) else None),
+                "tokenId": token_ids[idx] if idx < len(token_ids) else None,
+            }
+        )
+    return outcomes
+
+
+def _compact_market_candidate(
+    market: dict[str, Any], *, event_slug: str | None = None
+) -> dict[str, Any]:
+    outcomes = _compact_outcomes(market)
+    best_bid = _as_float(_first_present(market, "bestBid", "bid", "yesBid"))
+    best_ask = _as_float(_first_present(market, "bestAsk", "ask", "yesAsk"))
+    spread = _as_float(market.get("spread"))
+    if spread is None and best_bid is not None and best_ask is not None:
+        spread = best_ask - best_bid
+    active = _as_bool(market.get("active"))
+    accepting_orders = _as_bool(market.get("acceptingOrders"))
+    closed = _as_bool(market.get("closed"))
+    order_book_enabled = _as_bool(market.get("enableOrderBook"))
+    has_token_ids = any(o.get("tokenId") for o in outcomes)
+    tradable = (
+        has_token_ids
+        and order_book_enabled is not False
+        and accepting_orders is not False
+        and active is not False
+        and closed is not True
+    )
+    return {
+        "slug": _first_present(market, "slug", "marketSlug"),
+        "eventSlug": _event_slug(market) or event_slug,
+        "question": _first_present(market, "question", "title", "symbol"),
+        "outcomes": outcomes,
+        "bestBid": best_bid,
+        "bestAsk": best_ask,
+        "spread": spread,
+        "liquidity": _as_float(
+            _first_present(market, "liquidity", "liquidityNum", "liquidityClob")
+        ),
+        "volume24h": _as_float(
+            _first_present(market, "volume24h", "volume24hr", "volume24hrClob")
+        ),
+        "resolvesAt": _first_present(
+            market, "resolvesAt", "endDateIso", "endDate", "resolutionDate"
+        ),
+        "conditionId": _first_present(market, "conditionId", "condition_id"),
+        "tradable": bool(tradable),
+        "active": active,
+        "acceptingOrders": accepting_orders,
+        "closed": closed,
+    }
+
+
+def _compact_candidates(
+    markets: list[dict[str, Any]],
+    candidate_limit: int,
+    *,
+    event_slug: str | None = None,
+    sort_open_first: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    limit = max(0, int(candidate_limit))
+    candidates = [_compact_market_candidate(m, event_slug=event_slug) for m in markets]
+    if sort_open_first:
+        candidates.sort(
+            key=lambda c: (
+                c.get("active") is not True,
+                c.get("closed") is True,
+                c.get("acceptingOrders") is not True,
+                c.get("tradable") is not True,
+                -float(c.get("volume24h") or 0),
+                -float(c.get("liquidity") or 0),
+            )
+        )
+    candidates = candidates[:limit]
+    return candidates, _compact_truncation(len(markets), len(candidates))
+
+
+def _compact_market_detail(market: dict[str, Any]) -> dict[str, Any]:
+    detail = _compact_market_candidate(market)
+    detail.update(
+        {
+            "description": _compact_text(market.get("description"), max_chars=900),
+            "resolutionSource": _compact_text(
+                market.get("resolutionSource"), max_chars=500
+            ),
+            "rules": _compact_text(
+                _first_present(
+                    market,
+                    "rules",
+                    "resolutionRules",
+                    "resolutionCriteria",
+                    "groupItemTitle",
+                ),
+                max_chars=900,
+            ),
+        }
+    )
+    return detail
+
+
+def _compact_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "slug": event.get("slug"),
+        "title": event.get("title"),
+        "description": _compact_text(event.get("description"), max_chars=900),
+        "startDate": _first_present(event, "startDateIso", "startDate"),
+        "endDate": _first_present(event, "endDateIso", "endDate"),
+        "active": _as_bool(event.get("active")),
+        "closed": _as_bool(event.get("closed")),
+    }
 
 
 def _annotate(
@@ -264,6 +401,8 @@ async def polymarket_read(
     sort: PolymarketSort = "trending",
     status: PolymarketStatus = "active",
     offset: int = 0,
+    summary: bool = True,
+    candidate_limit: int = 5,
     # market/event
     market_slug: str | None = None,
     event_slug: str | None = None,
@@ -289,6 +428,8 @@ async def polymarket_read(
         `status`: active|closed|all.
       - `trending`: list markets sorted by 24h volume (`limit`, `offset`).
       - `get_market` / `get_event`: fetch by `market_slug` / `event_slug`.
+        These discovery actions return compact candidates by default; pass
+        `summary=False` only when debugging raw Gamma/backend payloads.
       - `quote`: market-order quote. BUY needs `amount_collateral` (USDC), SELL needs `shares`.
         Provide `market_slug`+`outcome` OR `token_id`.
       - `price`: best `BUY`/`SELL` price for a `token_id`.
@@ -356,6 +497,17 @@ async def polymarket_read(
                 )
                 if not ok_rows:
                     return err("error", str(rows))
+                if summary:
+                    candidates, truncation = _compact_candidates(rows, candidate_limit)
+                    return ok(
+                        {
+                            "action": action,
+                            "query": q,
+                            "summaryMode": True,
+                            "candidates": candidates,
+                            "truncation": truncation,
+                        }
+                    )
                 return ok({"action": action, "query": q, "markets": rows})
 
             case "trending":
@@ -368,15 +520,32 @@ async def polymarket_read(
                 )
                 if not ok_rows:
                     return err("error", str(rows))
-                return ok(
-                    {"action": action, "markets": [_trim_market(m) for m in rows]}
-                )
+                if summary:
+                    candidates, truncation = _compact_candidates(rows, candidate_limit)
+                    return ok(
+                        {
+                            "action": action,
+                            "summaryMode": True,
+                            "candidates": candidates,
+                            "truncation": truncation,
+                        }
+                    )
+                return ok({"action": action, "markets": rows})
 
             case "get_market":
                 slug = throw_if_empty_str("market_slug is required", market_slug)
                 ok_m, m = await adapter.get_market_by_slug(slug)
                 if not ok_m:
                     return err("error", str(m))
+                if summary:
+                    return ok(
+                        {
+                            "action": action,
+                            "summaryMode": True,
+                            "market": _compact_market_detail(m),
+                            "truncation": _compact_truncation(1, 1),
+                        }
+                    )
                 return ok({"action": action, "market": m})
 
             case "get_event":
@@ -384,6 +553,23 @@ async def polymarket_read(
                 ok_e, e = await adapter.get_event_by_slug(slug)
                 if not ok_e:
                     return err("error", str(e))
+                if summary:
+                    markets = [m for m in e.get("markets", []) if isinstance(m, dict)]
+                    candidates, truncation = _compact_candidates(
+                        markets,
+                        candidate_limit,
+                        event_slug=slug,
+                        sort_open_first=True,
+                    )
+                    return ok(
+                        {
+                            "action": action,
+                            "summaryMode": True,
+                            "event": _compact_event(e),
+                            "candidates": candidates,
+                            "truncation": truncation,
+                        }
+                    )
                 return ok({"action": action, "event": e})
 
             case "quote":

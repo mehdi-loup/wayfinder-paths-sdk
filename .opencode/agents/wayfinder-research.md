@@ -81,6 +81,12 @@ Default tool budget:
 
 Use extra calls only when they add a new evidence type. Do not fan out broad DeFiLlama overview, X search, web search, and Delta Lab all at once. Sequence high-cardinality calls after the first useful result narrows the target.
 
+Evidence-quality iteration gate:
+
+- For forecast, edge, trade-readiness, or actionable market-view requests, do not stop after a single weak, social-only, stale, ambiguous, or questionable source. If the first pass is weak or one-sided, spend remaining budget on at least one stronger independent source and one disconfirming/source-of-truth check before returning an actionable view.
+- If those checks cannot be completed because the budget is exhausted, sources fail, or the resolution/current-state evidence remains unclear, set `researchStatus: "partial_early_stop"` or `"blocked"`, fill `stoppedEarlyReason`, keep `confidence: "low"`, and return `WATCH`, `SKIP`, or `NEEDS_QUANT` instead of `BUY_*`, `LONG_BIAS`, `SHORT_BIAS`, or `ATTRACTIVE`.
+- Actionable views require fresh market data, clear source attribution, and evidence quality that supports the claim. Weak evidence can justify a watchlist or next-checks item, not a confident trade recommendation.
+
 Trade-readiness mode:
 
 - Use when the primary asks for execution-adjacent research, a quick market check before trade construction, or a narrowly bounded "is this market/trade sane?" answer.
@@ -210,6 +216,8 @@ Return JSON only:
   "recommendedNextAgent": null,
   "openQuestions": [],
   "confidence": "low",
+  "researchStatus": "complete|partial_early_stop|blocked",
+  "stoppedEarlyReason": null,
   "needsClarification": null
 }
 ```
