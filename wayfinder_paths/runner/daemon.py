@@ -189,7 +189,7 @@ class RunnerDaemon:
         if aborted:
             logger.warning(f"Marked {aborted} stale RUNNING runs as ABORTED")
 
-        self._reconcile_with_backend()
+        self._sync_to_backend_async()
 
         self._control = RunnerControlServer(
             sock_path=self._paths.sock_path, daemon=self
@@ -384,18 +384,6 @@ class RunnerDaemon:
                 "log_output": log_output,
             },
         )
-        self._sync_job(rp.job_name)
-
-    def _sync_job_async(self, name: str) -> None:
-        if is_opencode_instance():
-            self._run_side_effect(f"sync-job-{name}", lambda: self._sync_job(name))
-
-    def _delete_remote_job_async(self, name: str) -> None:
-        if is_opencode_instance():
-            self._run_side_effect(
-                f"delete-remote-job-{name}",
-                lambda: SCHEDULED_JOBS_CLIENT.delete_job(name),
-            )
 
     def _bind_runner_session_async(self, name: str) -> None:
         if not is_opencode_instance():
@@ -415,38 +403,32 @@ class RunnerDaemon:
             payload["notify_session_id"] = session_id
             self._db.update_job(name=name, payload=payload, interval_seconds=None)
             logger.info(f"Auto-bound job {name} to session {session_id}")
-            self._sync_job(name)
 
         self._run_side_effect(f"bind-runner-session-{name}", _bind)
 
-    def _sync_job(self, name: str) -> None:
+    def _sync_to_backend_async(self) -> None:
         if not is_opencode_instance():
             return
-        try:
-            job, state = self._db.get_job(name=name)
-        except KeyError:
-            return
-        SCHEDULED_JOBS_CLIENT.sync_job(
-            name,
-            {
-                "job_type": job.type,
-                "status": state.status,
-                "interval_seconds": job.interval_seconds,
-                "payload": job.payload,
-            },
-        )
 
-    def _reconcile_with_backend(self) -> None:
-        if not is_opencode_instance():
-            return
-        local_names = {str(j["name"]) for j in self._db.list_jobs()}
-        remote = SCHEDULED_JOBS_CLIENT.list_jobs()
-        remote_names = {str(j["job_name"]) for j in remote}
-        for orphan in remote_names - local_names:
-            logger.info(f"Reconcile: deleting remote-only job {orphan}")
-            SCHEDULED_JOBS_CLIENT.delete_job(orphan)
-        for name in local_names:
-            self._sync_job(name)
+        def _sync() -> None:
+            jobs = []
+            for j in self._db.list_jobs():
+                try:
+                    job, state = self._db.get_job(name=j["name"])
+                except KeyError:
+                    continue
+                jobs.append(
+                    {
+                        "job_name": job.name,
+                        "job_type": job.type,
+                        "status": state.status,
+                        "interval_seconds": job.interval_seconds,
+                        "payload": job.payload,
+                    }
+                )
+            SCHEDULED_JOBS_CLIENT.bulk_sync(jobs)
+
+        self._run_side_effect("bulk-sync", _sync)
 
     def _notify_session(
         self,
@@ -832,7 +814,7 @@ class RunnerDaemon:
             return {"ok": False, "error": str(exc)}
         if session_id is None:
             self._bind_runner_session_async(name)
-        self._sync_job_async(name)
+        self._sync_to_backend_async()
         return {"ok": True, "result": {"job_id": job_id, "name": name}}
 
     def ctl_update_job(
@@ -844,7 +826,7 @@ class RunnerDaemon:
             self._db.update_job(
                 name=name, payload=payload, interval_seconds=interval_seconds
             )
-            self._sync_job_async(name)
+            self._sync_to_backend_async()
             return {"ok": True, "result": {"name": name}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -852,7 +834,7 @@ class RunnerDaemon:
     def ctl_pause_job(self, *, name: str) -> dict[str, Any]:
         try:
             self._db.set_job_status(name=name, status=JobStatus.PAUSED)
-            self._sync_job_async(name)
+            self._sync_to_backend_async()
             return {"ok": True, "result": {"name": name, "status": JobStatus.PAUSED}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -862,7 +844,7 @@ class RunnerDaemon:
             job, _ = self._db.get_job(name=name)
             self._db.set_job_status(name=name, status=JobStatus.ACTIVE)
             self._db.set_next_run_at(job_id=job.id, next_run_at=_utc_epoch_s())
-            self._sync_job_async(name)
+            self._sync_to_backend_async()
             return {"ok": True, "result": {"name": name, "status": JobStatus.ACTIVE}}
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
@@ -945,5 +927,5 @@ class RunnerDaemon:
                 return {"ok": False, "error": str(exc)}
             self._running_by_job.pop(job_id, None)
 
-        self._delete_remote_job_async(str(name))
+        self._sync_to_backend_async()
         return {"ok": True, "result": {"name": str(name), "deleted": True}}
