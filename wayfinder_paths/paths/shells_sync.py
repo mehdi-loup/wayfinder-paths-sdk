@@ -10,6 +10,7 @@ fast lane for the most common mutations.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,15 @@ def sync_shells_inventory(
     """Self-gated: returns immediately when not inside a Fly OpenCode instance,
     so local CLI users / non-Shells consumers pay zero cost. Errors are caught
     and returned via the result; never raised."""
+    if os.getenv("WAYFINDER_SKIP_SHELLS_INVENTORY_SYNC", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return ShellsInventorySyncResult(
+            status="skipped", reason="disabled_by_env", trigger=trigger
+        )
+
     if not is_opencode_instance():
         return ShellsInventorySyncResult(
             status="skipped", reason="not_in_opencode_instance", trigger=trigger

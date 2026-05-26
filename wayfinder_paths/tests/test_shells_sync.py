@@ -59,6 +59,16 @@ def test_sync_skips_when_not_in_opencode(tmp_path: Path, monkeypatch) -> None:
     assert client.calls == []
 
 
+def test_sync_can_be_disabled_by_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENCODE_INSTANCE_ID", "test-app-789")
+    monkeypatch.setenv("WAYFINDER_SKIP_SHELLS_INVENTORY_SYNC", "1")
+    client = _FakeClient()
+    result = sync_shells_inventory(trigger="activate", cwd=tmp_path, client=client)
+    assert result.status == "skipped"
+    assert result.reason == "disabled_by_env"
+    assert client.calls == []
+
+
 def test_sync_posts_payload_when_in_opencode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENCODE_INSTANCE_ID", "test-app-789")
     _write_lockfile(
