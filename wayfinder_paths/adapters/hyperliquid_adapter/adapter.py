@@ -539,8 +539,10 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
         try:
-            portfolio = await HYPERLIQUID_INFO_CLIENT.portfolio_state(address)
-            return True, portfolio["spotClearinghouseState"]
+            data = await HYPERLIQUID_INFO_CLIENT.post(
+                {"type": "spotClearinghouseState", "user": address}
+            )
+            return True, data
         except Exception as exc:
             self.logger.error(f"Failed to fetch spot_user_state for {address}: {exc}")
             return False, str(exc)
@@ -549,8 +551,10 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], Any] | tuple[Literal[False], str]:
         try:
-            portfolio = await HYPERLIQUID_INFO_CLIENT.portfolio_state(address)
-            return True, portfolio["userAbstraction"]
+            data = await HYPERLIQUID_INFO_CLIENT.post(
+                {"type": "userAbstraction", "user": address}
+            )
+            return True, data
         except Exception as exc:
             self.logger.error(f"Failed to fetch user_abstraction for {address}: {exc}")
             return False, str(exc)
