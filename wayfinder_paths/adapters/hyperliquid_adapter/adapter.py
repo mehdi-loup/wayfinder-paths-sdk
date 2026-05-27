@@ -205,6 +205,31 @@ class HyperliquidAdapter(BaseAdapter):
         results = await asyncio.gather(*[_post_one(dex) for dex in get_perp_dexes()])
         return aggregator([r for r in results if r is not None])
 
+    async def _post_across_dexes_qn(
+        self,
+        payload: dict[str, Any],
+        aggregator: Callable[[list[Any]], Any],
+        *,
+        max_retries: int = 3,
+    ) -> Any:
+        async def _post_one(dex: str) -> Any:
+            body = {**payload, "dex": dex}
+            last_exc: Exception | None = None
+            for attempt in range(max_retries):
+                try:
+                    return await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(body)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5 * (2**attempt))
+            self.logger.warning(
+                f"All {max_retries} retries failed for dex={dex!r}: {last_exc}"
+            )
+            return None
+
+        results = await asyncio.gather(*[_post_one(dex) for dex in get_perp_dexes()])
+        return aggregator([r for r in results if r is not None])
+
     def get_price_decimals(self, asset_id: int) -> int:
         is_spot = asset_id >= 10_000
         max_decimals = 6 if not is_spot else 8
@@ -480,7 +505,7 @@ class HyperliquidAdapter(BaseAdapter):
             return base
 
         try:
-            data = await self._post_across_dexes(
+            data = await self._post_across_dexes_qn(
                 {"type": "clearinghouseState", "user": address}, _aggregate
             )
             return True, data
@@ -1382,7 +1407,7 @@ class HyperliquidAdapter(BaseAdapter):
             return merged
 
         try:
-            data = await self._post_across_dexes(
+            data = await self._post_across_dexes_qn(
                 {"type": "frontendOpenOrders", "user": address}, _aggregate
             )
             return True, data
