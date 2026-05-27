@@ -1800,44 +1800,47 @@ async def hyperliquid_get_state(label: str) -> dict[str, Any]:
         return err("not_found", f"Wallet not found: {label}")
 
     adapter = HyperliquidAdapter()
-    perp_ok, perp = await adapter.get_user_state(addr)
-    spot_ok, spot = await adapter.get_spot_user_state(addr)
-    abstraction_ok, abstraction = await adapter.get_user_abstraction(addr)
+    portfolio_ok, portfolio = await adapter.get_portfolio_state(addr)
+    if not portfolio_ok:
+        return err("state_error", f"Failed to fetch portfolio state: {portfolio}")
+
+    perp = adapter._aggregate_clearinghouse_from_portfolio(portfolio)
+    spot = portfolio["spotClearinghouseState"]
+    abstraction = portfolio["userAbstraction"]
 
     spot_balances: list[dict[str, Any]] = []
     outcome_positions: list[dict[str, Any]] = []
-    if spot_ok and isinstance(spot, dict):
-        for bal in spot.get("balances", []):
-            coin = str(bal.get("coin") or "")
-            if coin.startswith("+"):
-                if float(bal.get("total") or 0) == 0:
-                    continue
-                encoding = int(coin[1:])
-                outcome_positions.append(
-                    {
-                        "coin": coin,
-                        "outcome_id": encoding // 10,
-                        "side": encoding % 10,
-                        "total": bal.get("total"),
-                        "hold": bal.get("hold"),
-                        "entryNtl": bal.get("entryNtl"),
-                    }
-                )
-            else:
-                spot_balances.append(bal)
-        spot["balances"] = spot_balances
+    for bal in spot.get("balances", []):
+        coin = str(bal.get("coin") or "")
+        if coin.startswith("+"):
+            if float(bal.get("total") or 0) == 0:
+                continue
+            encoding = int(coin[1:])
+            outcome_positions.append(
+                {
+                    "coin": coin,
+                    "outcome_id": encoding // 10,
+                    "side": encoding % 10,
+                    "total": bal["total"],
+                    "hold": bal["hold"],
+                    "entryNtl": bal["entryNtl"],
+                }
+            )
+        else:
+            spot_balances.append(bal)
+    spot["balances"] = spot_balances
 
     return ok(
         {
             "label": label,
             "address": addr,
-            "perp": {"success": perp_ok, "state": perp},
-            "spot": {"success": spot_ok, "state": spot},
+            "perp": {"success": True, "state": perp},
+            "spot": {"success": True, "state": spot},
             "account_abstraction": {
-                "success": abstraction_ok,
+                "success": True,
                 "state": abstraction,
             },
-            "outcomes": {"success": spot_ok, "positions": outcome_positions},
+            "outcomes": {"success": True, "positions": outcome_positions},
         }
     )
 

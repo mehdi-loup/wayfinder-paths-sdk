@@ -130,6 +130,20 @@ async def test_qn_frontend_open_orders(client: HyperliquidInfoClient) -> None:
     assert isinstance(r, list)
 
 
+# ── Portfolio state (backend → QuickNode hl_portfolioState) ───────────────
+
+
+@needs_api_key
+@pytest.mark.asyncio
+async def test_portfolio_state(client: HyperliquidInfoClient) -> None:
+    r = await client.portfolio_state(TEST_USER)
+    assert "clearinghouseState" in r
+    assert "spotClearinghouseState" in r
+    assert "userAbstraction" in r
+    assert "assetPositions" in r["clearinghouseState"]
+    assert "balances" in r["spotClearinghouseState"]
+
+
 # ── Public-direct path (SDK Info → api.hyperliquid.xyz) ──────────────────
 
 

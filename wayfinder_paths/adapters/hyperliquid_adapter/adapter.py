@@ -449,41 +449,56 @@ class HyperliquidAdapter(BaseAdapter):
             self.logger.error(f"Failed to fetch L2 book for {coin}: {exc}")
             return False, str(exc)
 
+    async def get_portfolio_state(
+        self, address: str
+    ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
+        try:
+            data = await HYPERLIQUID_INFO_CLIENT.portfolio_state(address)
+            return True, data
+        except Exception as exc:
+            self.logger.error(f"Failed to fetch portfolio_state for {address}: {exc}")
+            return False, str(exc)
+
+    @staticmethod
+    def _aggregate_clearinghouse_from_portfolio(
+        portfolio: dict[str, Any],
+    ) -> dict[str, Any]:
+        dex_names = get_perp_dexes()
+        states: list[dict[str, Any]] = []
+        for dex in dex_names:
+            if dex == "":
+                states.append(portfolio["clearinghouseState"])
+            elif dex in portfolio:
+                states.append(portfolio[dex]["clearinghouseState"])
+        if not states:
+            return {}
+        base = states[0]
+        for other in states[1:]:
+            base["assetPositions"] = base.get("assetPositions", []) + other.get(
+                "assetPositions", []
+            )
+            for summary_key in ("marginSummary", "crossMarginSummary"):
+                base_summary = base.get(summary_key, {})
+                other_summary = other.get(summary_key, {})
+                for field in (
+                    "accountValue",
+                    "totalNtlPos",
+                    "totalRawUsd",
+                    "totalMarginUsed",
+                ):
+                    base_val = float(base_summary.get(field, 0))
+                    other_val = float(other_summary.get(field, 0))
+                    base_summary[field] = str(base_val + other_val)
+                base[summary_key] = base_summary
+        return base
+
     async def get_user_state(
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
-        def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
-            if not results:
-                return {}
-            base = results[0]
-            for other in results[1:]:
-                base_positions = base.get("assetPositions", [])
-                other_positions = other.get("assetPositions", [])
-                base["assetPositions"] = base_positions + other_positions
-
-                for summary_key in ("marginSummary", "crossMarginSummary"):
-                    base_summary = base.get(summary_key, {})
-                    other_summary = other.get(summary_key, {})
-                    for field in (
-                        "accountValue",
-                        "totalNtlPos",
-                        "totalRawUsd",
-                        "totalMarginUsed",
-                    ):
-                        base_val = float(base_summary.get(field, 0))
-                        other_val = float(other_summary.get(field, 0))
-                        base_summary[field] = str(base_val + other_val)
-                    base[summary_key] = base_summary
-            return base
-
-        try:
-            data = await self._post_across_dexes(
-                {"type": "clearinghouseState", "user": address}, _aggregate
-            )
-            return True, data
-        except Exception as exc:
-            self.logger.error(f"Failed to fetch user_state for {address}: {exc}")
-            return False, str(exc)
+        ok, data = await self.get_portfolio_state(address)
+        if not ok:
+            return False, data
+        return True, self._aggregate_clearinghouse_from_portfolio(data)
 
     @classmethod
     def active_asset_data_coin(cls, asset_name: str) -> str:
@@ -537,24 +552,18 @@ class HyperliquidAdapter(BaseAdapter):
     async def get_spot_user_state(
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
-        try:
-            data = get_info().spot_user_state(address)
-            return True, data
-        except Exception as exc:
-            self.logger.error(f"Failed to fetch spot_user_state for {address}: {exc}")
-            return False, str(exc)
+        ok, data = await self.get_portfolio_state(address)
+        if not ok:
+            return False, data
+        return True, data["spotClearinghouseState"]
 
     async def get_user_abstraction(
         self, address: str
     ) -> tuple[Literal[True], Any] | tuple[Literal[False], str]:
-        try:
-            data = await HYPERLIQUID_INFO_CLIENT.post(
-                {"type": "userAbstraction", "user": address}
-            )
-            return True, data
-        except Exception as exc:
-            self.logger.error(f"Failed to fetch user_abstraction for {address}: {exc}")
-            return False, str(exc)
+        ok, data = await self.get_portfolio_state(address)
+        if not ok:
+            return False, data
+        return True, data["userAbstraction"]
 
     async def get_full_user_state(
         self,
@@ -574,21 +583,18 @@ class HyperliquidAdapter(BaseAdapter):
 
         ok_any = False
 
-        perp_result = await self.get_user_state(account)
-        if perp_result[0]:
+        portfolio_ok, portfolio = await self.get_portfolio_state(account)
+        if portfolio_ok:
             ok_any = True
-            out["perp"] = perp_result[1]
-            out["positions"] = perp_result[1].get("assetPositions", [])
+            perp = self._aggregate_clearinghouse_from_portfolio(portfolio)
+            out["perp"] = perp
+            out["positions"] = perp.get("assetPositions", [])
+            if include_spot:
+                out["spot"] = portfolio["spotClearinghouseState"]
         else:
-            out["errors"]["perp"] = perp_result[1]
-
-        if include_spot:
-            spot_result = await self.get_spot_user_state(account)
-            if spot_result[0]:
-                ok_any = True
-                out["spot"] = spot_result[1]
-            else:
-                out["errors"]["spot"] = spot_result[1]
+            out["errors"]["perp"] = portfolio
+            if include_spot:
+                out["errors"]["spot"] = portfolio
 
         if include_open_orders:
             orders_result = await self.get_frontend_open_orders(account)

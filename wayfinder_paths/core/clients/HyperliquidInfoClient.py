@@ -36,7 +36,9 @@ def _public_info() -> Info:
 class HyperliquidInfoClient(WayfinderClient):
     def __init__(self) -> None:
         super().__init__()
-        self._qn_proxy_url = f"{get_api_base_url()}/blockchain/hyperliquid/qn-info/"
+        base = get_api_base_url()
+        self._qn_proxy_url = f"{base}/blockchain/hyperliquid/qn-info/"
+        self._portfolio_state_url = f"{base}/blockchain/hyperliquid/portfolio-state/"
 
     async def post(self, body: dict[str, Any]) -> Any:
         if body["type"] in QN_PROXIED_TYPES:
@@ -44,6 +46,13 @@ class HyperliquidInfoClient(WayfinderClient):
             resp.raise_for_status()
             return resp.json()
         return await asyncio.to_thread(_public_info().post, "/info", body)
+
+    async def portfolio_state(self, user: str) -> dict[str, Any]:
+        resp = await self._authed_request(
+            "GET", self._portfolio_state_url, params={"user": user}
+        )
+        resp.raise_for_status()
+        return resp.json()
 
 
 HYPERLIQUID_INFO_CLIENT = HyperliquidInfoClient()
