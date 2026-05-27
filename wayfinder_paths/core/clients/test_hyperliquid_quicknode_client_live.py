@@ -12,6 +12,7 @@ import os
 import pytest
 
 from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
+    HYPERLIQUID_QUICKNODE_INFO_CLIENT,
     QUICKNODE_PROXIED_TYPES,
     HyperliquidQuicknodeInfoClient,
 )
@@ -39,13 +40,15 @@ def client() -> HyperliquidQuicknodeInfoClient:
 
 def test_whitelist_covers_critical_methods() -> None:
     for method in (
+        "activeAssetData",
         "clearinghouseState",
-        "spotClearinghouseState",
         "frontendOpenOrders",
         "maxBuilderFee",
         "meta",
         "openOrders",
+        "outcomeMeta",
         "perpDexs",
+        "spotClearinghouseState",
         "spotMeta",
     ):
         assert method in QUICKNODE_PROXIED_TYPES

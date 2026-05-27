@@ -29,9 +29,8 @@ from loguru import logger
 from wayfinder_paths.adapters.hyperliquid_adapter.info import get_info, get_perp_dexes
 from wayfinder_paths.adapters.hyperliquid_adapter.utils import spot_index_from_asset_id
 from wayfinder_paths.core.adapters.BaseAdapter import BaseAdapter
-from wayfinder_paths.core.clients.HyperliquidInfoClient import HYPERLIQUID_INFO_CLIENT
 from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
-    HYPERLIQUID_QUICKNODE_CLIENT,
+    HYPERLIQUID_QUICKNODE_INFO_CLIENT,
 )
 from wayfinder_paths.core.constants import ZERO_ADDRESS
 from wayfinder_paths.core.constants.contracts import (
@@ -192,7 +191,7 @@ class HyperliquidAdapter(BaseAdapter):
             last_exc: Exception | None = None
             for attempt in range(max_retries):
                 try:
-                    return await HYPERLIQUID_INFO_CLIENT.post(body)
+                    return await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(body)
                 except Exception as exc:
                     last_exc = exc
                     if attempt < max_retries - 1:
@@ -335,7 +334,9 @@ class HyperliquidAdapter(BaseAdapter):
             return True, cached
 
         try:
-            data = await HYPERLIQUID_INFO_CLIENT.post({"type": "allPerpMetas"})
+            data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(
+                {"type": "allPerpMetas"}
+            )
             await self._cache.set(cache_key, data, ttl=60)
             return True, data
         except Exception as exc:
@@ -456,7 +457,7 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
         try:
-            portfolio = await HYPERLIQUID_QUICKNODE_CLIENT.portfolio_state(address)
+            portfolio = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.portfolio_state(address)
         except Exception as exc:
             self.logger.error(f"Failed to fetch user_state for {address}: {exc}")
             return False, str(exc)
@@ -524,7 +525,7 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str, asset_name: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
         try:
-            data = await HYPERLIQUID_INFO_CLIENT.post(
+            data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(
                 {
                     "type": "activeAssetData",
                     "user": address,
@@ -542,7 +543,7 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
         try:
-            data = await HYPERLIQUID_INFO_CLIENT.post(
+            data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(
                 {"type": "spotClearinghouseState", "user": address}
             )
             return True, data
@@ -554,7 +555,7 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], Any] | tuple[Literal[False], str]:
         try:
-            data = await HYPERLIQUID_INFO_CLIENT.post(
+            data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(
                 {"type": "userAbstraction", "user": address}
             )
             return True, data
@@ -618,10 +619,10 @@ class HyperliquidAdapter(BaseAdapter):
             # Hyperliquid expects `id` but older SDKs may use `marginTableId`
             body = {"type": "marginTable", "id": int(margin_table_id)}
             try:
-                data = await HYPERLIQUID_INFO_CLIENT.post(body)
+                data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(body)
             except Exception:  # noqa: BLE001
                 body = {"type": "marginTable", "marginTableId": int(margin_table_id)}
-                data = await HYPERLIQUID_INFO_CLIENT.post(body)
+                data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(body)
             await self._cache.set(cache_key, data, ttl=86400)
             return True, data
         except Exception as exc:
@@ -1435,7 +1436,7 @@ class HyperliquidAdapter(BaseAdapter):
     ) -> tuple[bool, int]:
         try:
             body = {"type": "maxBuilderFee", "user": user, "builder": builder}
-            data = await HYPERLIQUID_INFO_CLIENT.post(body)
+            data = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(body)
             # Response is just an integer (tenths of basis points)
             return True, int(data) if data is not None else 0
         except Exception as exc:
@@ -1829,7 +1830,7 @@ class HyperliquidAdapter(BaseAdapter):
         vault_address: str,
     ) -> tuple[bool, dict[str, float] | str]:
         try:
-            details = await HYPERLIQUID_INFO_CLIENT.post(
+            details = await HYPERLIQUID_QUICKNODE_INFO_CLIENT.post(
                 {"type": "vaultDetails", "vaultAddress": str(vault_address)}
             )
             account_value = float(

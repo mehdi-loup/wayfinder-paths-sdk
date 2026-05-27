@@ -76,7 +76,7 @@ class TestHyperliquidAdapter:
     @pytest.fixture
     def _patch_adapter(self, mock_info):
         """Context manager that patches get_info, get_perp_dexes, and the
-        new HYPERLIQUID_INFO_CLIENT.post — all three route to mock_info.post."""
+        new HYPERLIQUID_QUICKNODE_INFO_CLIENT.post — all three route to mock_info.post."""
 
         async def _info_client_post(payload):
             return mock_info.post("/info", payload)
@@ -91,7 +91,7 @@ class TestHyperliquidAdapter:
                 return_value=[""],
             ),
             patch(
-                "wayfinder_paths.adapters.hyperliquid_adapter.adapter.HYPERLIQUID_INFO_CLIENT.post",
+                "wayfinder_paths.adapters.hyperliquid_adapter.adapter.HYPERLIQUID_QUICKNODE_INFO_CLIENT.post",
                 new=AsyncMock(side_effect=_info_client_post),
             ),
         )
