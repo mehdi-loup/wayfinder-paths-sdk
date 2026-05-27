@@ -17,9 +17,10 @@ import time
 
 import pytest
 
-from wayfinder_paths.core.clients.HyperliquidInfoClient import (
+from wayfinder_paths.core.clients.HyperliquidInfoClient import HyperliquidInfoClient
+from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
     QN_PROXIED_TYPES,
-    HyperliquidInfoClient,
+    HyperliquidQuicknodeInfoClient,
 )
 from wayfinder_paths.core.config import get_api_key
 
@@ -135,8 +136,8 @@ async def test_qn_frontend_open_orders(client: HyperliquidInfoClient) -> None:
 
 @needs_api_key
 @pytest.mark.asyncio
-async def test_portfolio_state(client: HyperliquidInfoClient) -> None:
-    r = await client.portfolio_state(TEST_USER)
+async def test_portfolio_state() -> None:
+    r = await HyperliquidQuicknodeInfoClient().portfolio_state(TEST_USER)
     assert "clearinghouseState" in r
     assert "spotClearinghouseState" in r
     assert "userAbstraction" in r

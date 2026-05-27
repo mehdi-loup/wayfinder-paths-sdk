@@ -30,6 +30,9 @@ from wayfinder_paths.adapters.hyperliquid_adapter.info import get_info, get_perp
 from wayfinder_paths.adapters.hyperliquid_adapter.utils import spot_index_from_asset_id
 from wayfinder_paths.core.adapters.BaseAdapter import BaseAdapter
 from wayfinder_paths.core.clients.HyperliquidInfoClient import HYPERLIQUID_INFO_CLIENT
+from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
+    HYPERLIQUID_QN_CLIENT,
+)
 from wayfinder_paths.core.constants import ZERO_ADDRESS
 from wayfinder_paths.core.constants.contracts import (
     HYPERCORE_SENTINEL_ADDRESS,
@@ -453,7 +456,7 @@ class HyperliquidAdapter(BaseAdapter):
         self, address: str
     ) -> tuple[Literal[True], dict[str, Any]] | tuple[Literal[False], str]:
         try:
-            portfolio = await HYPERLIQUID_INFO_CLIENT.portfolio_state(address)
+            portfolio = await HYPERLIQUID_QN_CLIENT.portfolio_state(address)
         except Exception as exc:
             self.logger.error(f"Failed to fetch user_state for {address}: {exc}")
             return False, str(exc)
