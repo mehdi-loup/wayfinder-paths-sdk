@@ -48,7 +48,7 @@ Research MCP surface:
 
 - Web/news: `core_web_search`, `core_web_fetch`.
 - Social/sentiment: `research_social_x_search`, `research_crypto_sentiment`.
-- Delta Lab snapshots: `research_get_top_apy`, `research_get_basis_apy_sources`, `research_get_basis_symbols`, `research_get_asset_basis_info`, `research_search_delta_lab_assets`, `research_search_delta_lab_markets`, `research_search_delta_lab_instruments`, `research_get_delta_lab_pendle_market`, `research_search_price`, `research_search_lending`, `research_search_perp`, `research_search_borrow_routes`.
+- Delta Lab snapshots: `research_get_top_apy` (optional `instrument_type` filter: `perp`, `pendle_pt`, `boros_market`, `boros_vault`, `yield_token`, `lending_supply`), `research_get_basis_apy_sources`, `research_get_basis_symbols`, `research_get_asset_basis_info`, `research_search_delta_lab_assets`, `research_search_delta_lab_markets`, `research_search_delta_lab_instruments`, `research_get_delta_lab_pendle_market`, `research_search_price`, `research_search_lending`, `research_search_perp`, `research_search_borrow_routes`.
 - Direct runtime sources: `research_defillama_free`, `research_goldsky_graphql`, `research_goldsky_search`, `research_goldsky_schema`.
 - Alpha Lab: `research_get_alpha_types`, `research_search_alpha`.
 - Polymarket read-only: `polymarket_read`.

@@ -89,6 +89,8 @@ top = sorted(roots, key=lambda r: r.get("opportunity_count", 0), reverse=True)[:
 
 # B) Highest-APY opportunity available right now (MCP-friendly):
 top_apy = await DELTA_LAB_CLIENT.get_top_apy(limit=100, lookback_days=7)
+# Optional: narrow to one instrument class with `instrument_type=` —
+# "perp", "pendle_pt", "boros_market", "boros_vault", "yield_token", "lending_supply"
 # then group opportunities by `basis_symbol` and take per-group max.
 ```
 

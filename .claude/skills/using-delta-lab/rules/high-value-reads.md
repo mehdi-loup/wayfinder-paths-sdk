@@ -44,7 +44,7 @@ When comparing or reporting APYs, always interpret them as decimals. A value of 
 **Use MCP tools for all queries** - instant, no script needed. See `MCP_INTEGRATION.md` for full documentation.
 
 Quick tools:
-- `research_get_top_apy(lookback_days="7", limit="20")` - **Top 20 APYs across ALL symbols** (7-day lookback)
+- `research_get_top_apy(lookback_days="7", limit="20")` - **Top 20 APYs across ALL symbols** (7-day lookback). Pass `instrument_type="perp"|"pendle_pt"|"boros_market"|"boros_vault"|"yield_token"|"lending_supply"` to narrow to one class.
 - `research_get_basis_apy_sources(basis_symbol="WSTETH", lookback_days="7", limit="10")` - Top 10 yield opportunities for WSTETH (7-day lookback)
 - `research_get_basis_apy_sources(basis_symbol="WSTETH", lookback_days="30", limit="50")` - Top 50 opportunities for WSTETH (30-day lookback)
 

@@ -19,21 +19,19 @@ This applies to all Delta Lab outputs.
 The MCP surface is intentionally narrow — snapshots only. Anything time-series, by-asset-id, plotting, or bulk requires the Python client (`DELTA_LAB_CLIENT`).
 
 ### 1. Top APY (All Symbols)
-**Tool:** `research_get_top_apy(lookback_days, limit)`
+**Tool:** `research_get_top_apy(lookback_days, limit, instrument_type)`
 
 **Purpose:** Get top APY opportunities across ALL basis symbols (not symbol-specific). Returns LONG opportunities covering all protocols: perps, Pendle PTs, Boros IRS, yield-bearing tokens, and lending.
 
 **Parameters:**
 - `lookback_days` - Days to average over (default `"7"`, min `"1"`)
-- `limit` - Max opportunities to return (default `"50"`, max `"500"`)
+- `limit` - Max opportunities to return (default `"25"`, max `"500"`)
+- `instrument_type` - Optional. One of `"perp"`, `"pendle_pt"`, `"boros_market"`, `"boros_vault"`, `"yield_token"`, `"lending_supply"`.
 
 **Examples:**
 ```python
-# Default: 7-day lookback, top 50 across all symbols
 research_get_top_apy()
-
-# Custom: 14-day lookback, top 100
-research_get_top_apy(lookback_days="14", limit="100")
+research_get_top_apy(instrument_type="lending_supply", limit="15")
 ```
 
 ### 2. APY Sources (Symbol-Specific)
