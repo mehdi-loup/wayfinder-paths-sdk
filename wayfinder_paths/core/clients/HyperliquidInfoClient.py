@@ -8,7 +8,7 @@ from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
 from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
-    HYPERLIQUID_QN_CLIENT,
+    HYPERLIQUID_QUICKNODE_CLIENT,
     QN_PROXIED_TYPES,
 )
 
@@ -21,7 +21,7 @@ def _public_info() -> Info:
 class HyperliquidInfoClient:
     async def post(self, body: dict[str, Any]) -> Any:
         if body["type"] in QN_PROXIED_TYPES:
-            return await HYPERLIQUID_QN_CLIENT.post(body)
+            return await HYPERLIQUID_QUICKNODE_CLIENT.post(body)
         return await asyncio.to_thread(_public_info().post, "/info", body)
 
 

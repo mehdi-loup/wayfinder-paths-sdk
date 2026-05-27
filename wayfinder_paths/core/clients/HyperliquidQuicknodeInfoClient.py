@@ -40,4 +40,4 @@ class HyperliquidQuicknodeInfoClient(WayfinderClient):
         return resp.json()
 
 
-HYPERLIQUID_QN_CLIENT = HyperliquidQuicknodeInfoClient()
+HYPERLIQUID_QUICKNODE_CLIENT = HyperliquidQuicknodeInfoClient()
