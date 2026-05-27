@@ -10,9 +10,10 @@ from wayfinder_paths.mcp.context_guard import guard_payload
 
 @pytest.fixture
 def guard_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Guard auto-disables under pytest (via PYTEST_CURRENT_TEST). Clear it here
-    so we can exercise truncation behavior, and point scratch at a temp dir."""
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    """Guard auto-disables under pytest (via PYTEST_CURRENT_TEST). Opt back in
+    with WF_FORCE_CONTEXT_GUARD so we can exercise truncation behavior, and
+    point scratch at a temp dir we can inspect."""
+    monkeypatch.setenv("WF_FORCE_CONTEXT_GUARD", "1")
     monkeypatch.setenv("WAYFINDER_SCRATCH_DIR", str(tmp_path))
     yield tmp_path
 

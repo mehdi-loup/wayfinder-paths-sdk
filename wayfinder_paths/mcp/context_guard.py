@@ -123,6 +123,12 @@ def guard_payload(
     Apply at MCP-boundary only — never inside clients/adapters whose returns are consumed
     programmatically. The envelope shape is: {_truncated, artifact, bytes, shape, head, hint}.
     """
+    # Skip during pytest runs
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get(
+        "WF_FORCE_CONTEXT_GUARD"
+    ):
+        return payload
+
     limit = max_bytes if max_bytes is not None else _max_bytes()
 
     # Big plain text: spill as .txt, no JSON quoting.
