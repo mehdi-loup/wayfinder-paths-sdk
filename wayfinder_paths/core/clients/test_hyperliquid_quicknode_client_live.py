@@ -12,7 +12,6 @@ import os
 import pytest
 
 from wayfinder_paths.core.clients.HyperliquidQuicknodeInfoClient import (
-    HYPERLIQUID_QUICKNODE_INFO_CLIENT,
     QUICKNODE_PROXIED_TYPES,
     HyperliquidQuicknodeInfoClient,
 )

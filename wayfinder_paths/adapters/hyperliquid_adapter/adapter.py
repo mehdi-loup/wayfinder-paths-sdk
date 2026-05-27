@@ -185,17 +185,15 @@ class HyperliquidAdapter(BaseAdapter):
         payload: dict[str, Any],
         aggregator: Callable[[list[Any]], Any],
         *,
-        client: Any = None,
+        client=HYPERLIQUID_INFO_CLIENT,
         max_retries: int = 3,
     ) -> Any:
-        _client = client or HYPERLIQUID_INFO_CLIENT
-
         async def _post_one(dex: str) -> Any:
             body = {**payload, "dex": dex}
             last_exc: Exception | None = None
             for attempt in range(max_retries):
                 try:
-                    return await _client.post(body)
+                    return await client.post(body)
                 except Exception as exc:
                     last_exc = exc
                     if attempt < max_retries - 1:
