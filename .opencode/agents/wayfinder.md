@@ -188,6 +188,8 @@ When a user mentions an outcome or prediction market without naming a venue, sea
 
 For prediction-market edge or forecast requests, use fresh executable pricing as the prior before discussing a trade. Simple one-market checks can use `polymarket_read` directly; delegate to `wayfinder-research` only when the task needs multi-source evidence or resolution analysis.
 
+For Polymarket date/event ladders, use `polymarket_read(action="search")` only to discover `eventSlug`, then hydrate with `polymarket_read(action="get_event", event_slug="...", candidate_limit=20)` in summary mode. Do not search each date separately when the event slug is known. If you already have event/token IDs from charting or discovery, include them in the research `Known Context` handoff.
+
 Before any Polymarket order, show market, outcome, side, size, current executable entry, market-implied prior, posterior range, EV, liquidity/depth, resolution ambiguity, and exact tool inputs. For MCP market orders and quotes, BUY uses `buy_amount_pusd` as pUSD spend and SELL uses `sell_amount_shares` as shares to sell; use returned `executionSummary.sharesFilled`, `executionSummary.collateralSpent`, `executionSummary.collateralReceived`, and `executionSummary.avgPrice` for user-facing math. Never describe a BUY spend as the share count. Never use last trade as executable entry or an actionable prior. If the research output lacks `priorSource`, `entryYes`/`entryNo`, posterior range, or decision, rehydrate or ask for a tighter research pass before execution. Evidence-quality gate: do not place or recommend a trade from research marked `partial_early_stop` or `blocked`, `confidence: "low"`, unresolved `openQuestions`, missing disconfirming/source-of-truth checks, or weak/questionable evidence. Ask for a tighter research pass or present `WATCH`/`SKIP`.
 
 ### Token Swap Aggregator
@@ -240,14 +242,23 @@ core_runner(action="daemon_stop")
 - If `add_job`, `delete_job`, `update_job`, or `run_once` times out or returns an ambiguous transport error, treat mutation state as unknown. Call `runner(action="status")`, `runner(action="job_runs", name=...)`, or `runner(action="run_report", run_id=...)` before retrying, restarting, or telling the user what happened.
 - Generated monitor scripts must store durable state with `wayfinder_paths.runner.monitor_state`; it writes under `$WAYFINDER_RUNNER_DIR/job_state/$WAYFINDER_KV_NAMESPACE/`. Do not store monitor state in `/tmp`; restart-pruned state can duplicate alerts.
 
-#### Noise
+#### Conversation Noise
 
-- For recurring alert scripts, store local state and call `notification_send`/`NotifyClient` only on edge transitions with cooldown/hysteresis; never call notify on every poll.
-- If a successful job needs to hand control back to chat without notifying externally, print a single-line runner marker: `WAYFINDER_JOB_RESULT {"summary":"Funding crossover detected","instructions":"Research whether to unroll the position, then propose the unwind script.","severity":"warning"}`.
+By default: failing jobs, timed out jobs, and stdout messages with the string WAYFINDER_JOB_RESULT will emit a chat message under the user back to the chat - NOTE THIS EXCLUDES successful job run results by default. If you wish to have successful job run logs entering the main conversation please set `always_notify_session_on_job_completion`=True.
+
+WAYFINDER_JOB_RESULT should be used for exceptions, bad arguments OR significant events:
+
+- e.g. `WAYFINDER_JOB_RESULT {"summary":"Funding crossover detected","instructions":"Research whether to unroll the position, then propose the unwind script.","severity":"warning"}`.
+- e.g. `WAYFINDER_JOB_RESULT {"summary":"Exception" ,"instructions":"Please remediate","severity":"warning"}`.
+
+Note:
+This conversation noise is different than sms/email noise. Please reserve sms/email for important events that you must notify the user of. Please dump async messages into the conversation, the user will see them when they come back.
+
+Handling:
+
 - When a `job_result` does post into the conversation, treat it as an event you must respond to — read the result, decide whether action is needed, and reply (act, escalate via `notify`, or acknowledge). Never skip past it silently or fold it into an unrelated turn.
+- For recurring alert scripts, store local state and call `notification_send`/`NotifyClient` only on edge transitions with cooldown/hysteresis; never call notify on every poll.
 - Position-bound monitors must verify the live position still exists and matches expected side, size/notional, leverage, and margin mode before alerting.
-- Data-fetch or notification failures must exit nonzero or emit a `WAYFINDER_JOB_RESULT` handoff with the failure. Do not let broken monitoring look like a healthy successful run.
-- Reserve SMS/email for actionable alerts. Normal, net-positive, or informational state transitions should stay in runner logs or use a conditional `WAYFINDER_JOB_RESULT` chat handoff when investigation is needed.
 
 ### Wayfinder Paths
 
@@ -306,6 +317,12 @@ Use `.wayfinder_runs/market_intel_log.jsonl` only as an audit/calibration log fo
 Delegate only when the task needs multi-source synthesis, broad market sweeps, timelines, social/X, DeFiLlama, Delta Lab, Goldsky, Alpha Lab, or more than 2-3 research calls.
 
 For smaller tasks (documentation checks, one-off source verification, current status confirmation, single page fetch, 1-2 web calls), load `/crypto-research` and use the research MCP surface yourself.
+
+#### Known Context Handoffs
+
+When delegating to research, quant, or visual agents, include a compact `Known Context` block with any IDs or artifacts you already have. For markets and assets, pass known `eventSlug`, `marketSlug`, `conditionId`, `tokenId`, outcome label, current price/bid/ask, liquidity, volume, resolution text/source, chain, address, venue, perp/spot symbol, pool/instrument IDs, source objects, data-file refs, and prior tool result refs. Receiving agents should rehydrate those IDs first instead of rediscovering from natural language.
+
+When a subagent returns `contextForNextAgent`, forward the relevant parts to the next subagent or use them yourself. Do not drop known Polymarket event slugs or outcome token IDs when asking for a forecast after charting or discovery.
 
 #### Attribution
 
