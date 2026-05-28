@@ -315,7 +315,6 @@ async def onchain_swap(
     spender = (
         best_quote.get("approvalAddress")
         or best_quote.get("approval_address")
-        or best_quote.get("spender")
         or swap_tx.get("to")
     )
     approve_amount = (
