@@ -386,7 +386,7 @@ class PolymarketAdapter(BaseAdapter):
             )
             res.raise_for_status()
             data = res.json()
-            if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            if not data:
                 return False, "Market not found"
             return True, self._normalize_market(data[0])
         except Exception as exc:  # noqa: BLE001
