@@ -446,6 +446,20 @@ class PolymarketAdapter(BaseAdapter):
         tok = token_ids[idx]
         return True, str(tok)
 
+    async def resolve_token_id_from_slug(
+        self,
+        *,
+        market_slug: str,
+        outcome: str | int,
+    ) -> tuple[bool, str]:
+        """Slug + outcome → CLOB token_id. Combines `get_market_by_slug` and
+        `resolve_clob_token_id` so every (slug, outcome)-based entry point uses
+        the same resolution. Returns `(False, error_message)` on failure."""
+        ok, market = await self.get_market_by_slug(market_slug)
+        if not ok:
+            return False, market if isinstance(market, str) else "market lookup failed"
+        return self.resolve_clob_token_id(market=market, outcome=outcome)
+
     @staticmethod
     def _decimal_or_none(value: Any) -> Decimal | None:
         try:
@@ -509,12 +523,10 @@ class PolymarketAdapter(BaseAdapter):
         side: Literal["BUY", "SELL"],
         amount: float,
     ) -> tuple[bool, dict[str, Any] | str]:
-        ok, market = await self.get_market_by_slug(market_slug)
+        ok, token_id = await self.resolve_token_id_from_slug(
+            market_slug=market_slug, outcome=outcome
+        )
         if not ok:
-            return False, market
-
-        ok_tid, token_id = self.resolve_clob_token_id(market=market, outcome=outcome)
-        if not ok_tid:
             return False, token_id
 
         return await self.quote_market_order(
@@ -619,12 +631,10 @@ class PolymarketAdapter(BaseAdapter):
         amount_collateral: float = 1.0,
         max_slippage_pct: float | None = None,
     ) -> tuple[bool, dict[str, Any] | str]:
-        ok, market = await self.get_market_by_slug(market_slug)
+        ok, token_id = await self.resolve_token_id_from_slug(
+            market_slug=market_slug, outcome=outcome
+        )
         if not ok:
-            return False, market
-
-        ok_tid, token_id = self.resolve_clob_token_id(market=market, outcome=outcome)
-        if not ok_tid:
             return False, token_id
 
         return await self.place_market_order(
@@ -642,12 +652,10 @@ class PolymarketAdapter(BaseAdapter):
         shares: float = 1.0,
         max_slippage_pct: float | None = None,
     ) -> tuple[bool, dict[str, Any] | str]:
-        ok, market = await self.get_market_by_slug(market_slug)
+        ok, token_id = await self.resolve_token_id_from_slug(
+            market_slug=market_slug, outcome=outcome
+        )
         if not ok:
-            return False, market
-
-        ok_tid, token_id = self.resolve_clob_token_id(market=market, outcome=outcome)
-        if not ok_tid:
             return False, token_id
 
         return await self.place_market_order(
@@ -667,12 +675,10 @@ class PolymarketAdapter(BaseAdapter):
         end_ts: int | None = None,
         fidelity: int | None = None,
     ) -> tuple[bool, dict[str, Any] | str]:
-        ok, market = await self.get_market_by_slug(market_slug)
+        ok, token_id = await self.resolve_token_id_from_slug(
+            market_slug=market_slug, outcome=outcome
+        )
         if not ok:
-            return False, market
-
-        ok_tid, token_id = self.resolve_clob_token_id(market=market, outcome=outcome)
-        if not ok_tid:
             return False, token_id
 
         return await self.get_prices_history(
