@@ -1498,7 +1498,10 @@ class PolymarketAdapter(BaseAdapter):
                 or "is not registered" in text
             )
             if not transient:
-                submit_res.raise_for_status()
+                raise ValueError(
+                    f"Polymarket relayer rejected WALLET batch "
+                    f"(HTTP {submit_res.status_code}): {text}"
+                )
             last_error_text = text
             if time.monotonic() >= retry_deadline:
                 break
@@ -1628,7 +1631,11 @@ class PolymarketAdapter(BaseAdapter):
                 res = await self._relayer_http.post(
                     "/submit", content=body, headers=headers
                 )
-                res.raise_for_status()
+                if not res.is_success:
+                    raise ValueError(
+                        f"Polymarket relayer rejected WALLET-CREATE "
+                        f"(HTTP {res.status_code}): {res.text}"
+                    )
                 deploy_tx = await self._poll_relayer_tx(res.json()["transactionID"])
                 deploy_tx_hash = deploy_tx["transactionHash"]
 
