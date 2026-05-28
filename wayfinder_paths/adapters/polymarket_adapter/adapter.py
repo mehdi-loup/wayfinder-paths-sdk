@@ -665,6 +665,30 @@ class PolymarketAdapter(BaseAdapter):
             max_slippage_pct=max_slippage_pct,
         )
 
+    async def place_limit_prediction(
+        self,
+        *,
+        market_slug: str,
+        outcome: str | int = "YES",
+        side: Literal["BUY", "SELL"],
+        price: float,
+        size: float,
+        post_only: bool = False,
+    ) -> tuple[bool, dict[str, Any] | str]:
+        ok, token_id = await self.resolve_token_id_from_slug(
+            market_slug=market_slug, outcome=outcome
+        )
+        if not ok:
+            return False, token_id
+
+        return await self.place_limit_order(
+            token_id=token_id,
+            side=side,
+            price=price,
+            size=size,
+            post_only=post_only,
+        )
+
     async def get_market_prices_history(
         self,
         *,
