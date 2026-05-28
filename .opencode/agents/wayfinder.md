@@ -112,6 +112,10 @@ Use token IDs like `<coingecko_id>-<chain_code>` (e.g. `ethereum-arbitrum`, `usd
 
 For `onchain_quote_swap` and `onchain_swap`, `amount` is a human-unit string, not raw wei. For full-balance swaps, pass the exact `amount_decimal` string from `get_wallets`; do not round through floats.
 
+Swap token identity safety:
+- Do not silently substitute similar tokens or wrappers after the user approves a quote or action. ETH ↔ WETH, native ↔ wrapped variants, USDC ↔ USDT, bridged ↔ canonical variants, pUSD ↔ USDC, and same-symbol different-contract tokens all require a fresh quote and explicit user confirmation.
+- If a swap fails due to allowance visibility, route execution, or token nonconformance, report the failure and ask for a fresh quote; do not improvise a substitute asset.
+
 Supported chain identifiers:
 
 | Chain     |    ID | Code        | Symbol | Native token ID                   | Notes                                                                                          |
