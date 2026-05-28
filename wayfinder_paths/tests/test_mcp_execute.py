@@ -431,9 +431,7 @@ async def test_execute_cross_chain_swap_failed_bridge_marks_failed(
 
 
 @pytest.mark.asyncio
-async def test_execute_swap_prefers_quote_approval_address(
-    tmp_path: Path, monkeypatch
-):
+async def test_execute_swap_prefers_quote_approval_address(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("WAYFINDER_MCP_STATE_PATH", str(tmp_path / "mcp.sqlite3"))
     monkeypatch.setenv("WAYFINDER_RUNS_DIR", str(tmp_path / "runs"))
 
@@ -754,7 +752,9 @@ async def test_execute_swap_requires_confirmation_when_requote_worsens_output(
         side_effect=[quote("enso", "2000000"), quote("lifi", "1500000")]
     )
     send_mock = AsyncMock(
-        side_effect=Exception("execution reverted: ERC20: transfer amount exceeds allowance")
+        side_effect=Exception(
+            "execution reverted: ERC20: transfer amount exceeds allowance"
+        )
     )
 
     with (

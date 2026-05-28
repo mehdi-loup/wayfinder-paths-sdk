@@ -96,7 +96,9 @@ def _quote_output_amount(quote: dict[str, Any]) -> int | None:
     return _int_or_none(quote.get("output_amount") or quote.get("outputAmount"))
 
 
-def _quote_approval_spender(best_quote: dict[str, Any], swap_tx: dict[str, Any]) -> str | None:
+def _quote_approval_spender(
+    best_quote: dict[str, Any], swap_tx: dict[str, Any]
+) -> str | None:
     spender = (
         best_quote.get("approvalAddress")
         or best_quote.get("approval_address")
@@ -383,7 +385,10 @@ async def onchain_swap(
         )
 
     slippage = max(0.0, float(int(slippage_bps)) / 10_000.0)
-    async def _get_quote() -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+
+    async def _get_quote() -> tuple[
+        dict[str, Any] | None, dict[str, Any] | None, str | None
+    ]:
         try:
             data = await BRAP_CLIENT.get_quote(
                 from_token=from_token_addr,
@@ -409,7 +414,11 @@ async def onchain_swap(
 
     quote_data, best_quote, quote_error = await _get_quote()
     if quote_error or quote_data is None or best_quote is None:
-        return err("quote_error", quote_error or "No best_quote returned", {"quote": quote_data})
+        return err(
+            "quote_error",
+            quote_error or "No best_quote returned",
+            {"quote": quote_data},
+        )
 
     original_best_quote = best_quote
     requote_used = False
