@@ -117,7 +117,7 @@ class BasisTradingStrategy(BasisSnapshotMixin, Strategy):
     MIN_APY_UPGRADE_THRESHOLD = 0.02
     APY_UPGRADE_PAYBACK_DAYS = 21.0
 
-    HYPE_PRO_FEE: int = 30
+    HYPE_PRO_FEE: int = 50
     DEFAULT_BUILDER_FEE: dict[str, Any] = {"b": HYPE_FEE_WALLET, "f": HYPE_PRO_FEE}
 
     INFO = StratDescriptor(
