@@ -232,7 +232,9 @@ def run_backtest(
 
         # Current gross notional drives both the force-rebalance check and the
         # margin-in-use calc (these were two identical computations before).
-        current_gross_notional = float(np.nansum(np.abs(position_units * current_prices)))
+        current_gross_notional = float(
+            np.nansum(np.abs(position_units * current_prices))
+        )
 
         # Force-rebalance: allow reducing-gross trades to bypass rebalance_threshold
         # when current leverage exceeds config.leverage due to adverse price moves
@@ -324,7 +326,9 @@ def run_backtest(
             period_funding += funding_charge
 
         gross_notional = float(np.sum(np.abs(position_units * current_prices)))
-        portfolio_value = cash_balance + float(np.nansum(position_units * current_prices))
+        portfolio_value = cash_balance + float(
+            np.nansum(position_units * current_prices)
+        )
 
         if config.enable_liquidation and portfolio_value > 0:
             price_ok = current_prices > 0
@@ -361,9 +365,7 @@ def run_backtest(
                     fee_series.extend([0.0] * remaining)
                     funding_series.extend([0.0] * remaining)
                     if track_positions:
-                        position_snapshots.extend(
-                            [np.zeros(symbol_count)] * remaining
-                        )
+                        position_snapshots.extend([np.zeros(symbol_count)] * remaining)
                 break
 
         portfolio_values.append(portfolio_value)
