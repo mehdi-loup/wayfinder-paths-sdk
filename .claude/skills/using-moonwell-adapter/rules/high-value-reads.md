@@ -35,12 +35,12 @@ from wayfinder_paths.mcp.scripting import get_adapter
 
 
 async def main():
-    adapter = await get_adapter(MoonwellAdapter)
+    adapter = await get_adapter(MoonwellAdapter)  # read-only, no wallet needed
     ok, markets = await adapter.get_all_markets(
         chain_id=CHAIN_ID_OPTIMISM,
         include_apy=True,
         include_rewards=True,
-        include_usd=False,
+        include_usd=True,
     )
     if not ok:
         raise RuntimeError(markets)
@@ -49,9 +49,19 @@ async def main():
             market["chainName"],
             market.get("symbol"),
             market.get("underlyingSymbol"),
+            "supply=",
             market.get("supplyApy"),
+            "base_supply=",
+            market.get("baseSupplyApy"),
+            "reward_supply=",
+            market.get("rewardSupplyApy"),
+            "borrow=",
             market.get("borrowApy"),
+            "tvl_usd=",
+            market.get("totalSupplyUsd"),
+            "deprecated=",
             market.get("deprecated"),
+            "bad_debt=",
             market.get("badDebt"),
         )
 
@@ -63,6 +73,10 @@ if __name__ == "__main__":
 `get_all_markets()` returns live contract state plus local metadata such as
 `chainId`, `chainName`, `underlyingSymbol`, `deprecated`, `badDebt`, and
 `nativeUnderlying`.
+
+Use `include_rewards=False` for base-only yields. Use `include_usd=True` when
+ranking by liquidity/TVL, and do not infer TVL from mToken total supply or mToken
+decimals.
 
 ## Position Reads
 
@@ -85,7 +99,11 @@ async def main():
         raise RuntimeError(state)
     print(state["accountLiquidity"])
     for position in state.get("positions", []):
-        print(position["mtoken"], position["suppliedUnderlying"], position["borrowedUnderlying"])
+        print(
+            position["mtoken"],
+            position["suppliedUnderlying"],
+            position["borrowedUnderlying"],
+        )
 
 
 if __name__ == "__main__":
@@ -96,7 +114,7 @@ if __name__ == "__main__":
 
 | Method | Purpose | Wallet needed? |
 |--------|---------|----------------|
-| `get_all_markets(chain_id?, include_apy?, include_usd?, include_rewards?)` | All Core markets with rates and caps | No |
+| `get_all_markets(chain_id?, include_apy?, include_usd?, include_rewards?)` | All Core markets with rates, caps, and optional USD fields | No |
 | `get_apy(mtoken, chain_id?, apy_type?, include_rewards?)` | Supply or borrow APY for one Core market | No |
 | `get_collateral_factor(mtoken, chain_id?)` | Collateral factor | No |
 | `get_pos(mtoken, chain_id?, account?, include_usd?)` | One market position | Yes, unless `account` is passed |
