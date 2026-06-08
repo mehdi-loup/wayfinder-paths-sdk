@@ -127,7 +127,9 @@ async def backtest_perps_trigger(
 
     prices = drop_incomplete_bars(prices, interval)
     if prices.empty:
-        raise ValueError("No completed price bars remain after dropping incomplete bars")
+        raise ValueError(
+            "No completed price bars remain after dropping incomplete bars"
+        )
     if funding is not None:
         funding = drop_incomplete_bars(funding, interval)
 

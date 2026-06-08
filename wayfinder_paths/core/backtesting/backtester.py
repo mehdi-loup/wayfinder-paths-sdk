@@ -129,7 +129,9 @@ def run_backtest(
     interval = _bar_interval(prices.index)
     prices = drop_incomplete_bars(prices, interval)
     if prices.empty:
-        raise ValueError("No completed price bars remain after dropping incomplete bars")
+        raise ValueError(
+            "No completed price bars remain after dropping incomplete bars"
+        )
     target_positions = target_positions.loc[prices.index]
     if config.funding_rates is not None:
         config.funding_rates = drop_incomplete_bars(config.funding_rates, interval)

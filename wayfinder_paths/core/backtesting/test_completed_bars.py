@@ -150,9 +150,7 @@ def _test_ref(symbols: list[str]) -> BacktestRef:
     return BacktestRef(
         schema_version="0.1",
         produced=ProducedBy(at="", skill="", git_sha="test"),
-        code=CodeRefs(
-            signal=CodeEntry(module="", entrypoint="", source_sha256="test")
-        ),
+        code=CodeRefs(signal=CodeEntry(module="", entrypoint="", source_sha256="test")),
         venues=VenueRefs(perp=True),
         data=DataRefs(
             symbols=symbols,
