@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from wayfinder_paths.core.backtesting.data import drop_incomplete_bars
 from wayfinder_paths.core.backtesting.stats import calculate_stats
 from wayfinder_paths.core.backtesting.types import (
     BacktestConfig,
@@ -28,6 +29,12 @@ from wayfinder_paths.core.backtesting.utils import (
     get_maintenance_margin_rate,
     validate_target_positions,
 )
+
+
+def _bar_interval(index: pd.Index) -> pd.Timedelta:
+    if len(index) < 2:
+        return pd.Timedelta(hours=1)
+    return pd.Series(index).diff().dropna().median()
 
 
 def get_atomic_trade_scale(
@@ -119,6 +126,16 @@ def run_backtest(
     if not prices.index.equals(target_positions.index):
         raise ValueError("Prices and target_positions must have the same index")
 
+    interval = _bar_interval(prices.index)
+    prices = drop_incomplete_bars(prices, interval)
+    if prices.empty:
+        raise ValueError(
+            "No completed price bars remain after dropping incomplete bars"
+        )
+    target_positions = target_positions.loc[prices.index]
+    if config.funding_rates is not None:
+        config.funding_rates = drop_incomplete_bars(config.funding_rates, interval)
+
     symbols = list(prices.columns)
     if not all(sym in target_positions.columns for sym in symbols):
         raise ValueError("target_positions must have all symbols from prices")
@@ -138,10 +155,7 @@ def run_backtest(
                 "Cannot auto-detect periods_per_year with less than 2 data points. "
                 "Please specify periods_per_year in config."
             )
-        # Calculate average time difference between bars
-        time_diffs = pd.Series(timestamps).diff().dropna()
-        avg_bar_interval = time_diffs.median()  # Use median to handle irregular data
-        seconds_per_bar = avg_bar_interval.total_seconds()
+        seconds_per_bar = _bar_interval(timestamps).total_seconds()
 
         if seconds_per_bar <= 0:
             raise ValueError(

@@ -8,8 +8,9 @@ in backtest-ready DataFrame format.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
-from typing import Any
+import math
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
 import pandas as pd
 from loguru import logger
@@ -20,6 +21,61 @@ from wayfinder_paths.core.clients.HyperliquidDataClient import HyperliquidDataCl
 
 _DELTA_LAB_RETRIES = 3
 _DELTA_LAB_BACKOFF_S = 2.0
+_TimestampLabel = Literal["open", "close"]
+
+
+def _as_utc_timestamp(value: datetime | pd.Timestamp | str | None) -> pd.Timestamp:
+    ts = pd.Timestamp(datetime.now(UTC) if value is None else value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _parse_iso_naive_utc(value: str) -> datetime:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(UTC).replace(tzinfo=None)
+
+
+def _as_utc_index(index: pd.Index) -> pd.DatetimeIndex:
+    idx = pd.DatetimeIndex(pd.to_datetime(index))
+    if idx.tz is None:
+        return idx.tz_localize("UTC")
+    return idx.tz_convert("UTC")
+
+
+def _lookback_days_for_window(start: datetime, end: datetime) -> int:
+    """Delta Lab lookback_days must be positive, even for sub-day windows."""
+    seconds = (end - start).total_seconds()
+    return max(1, math.ceil(seconds / 86_400))
+
+
+def drop_incomplete_bars(
+    df: pd.DataFrame,
+    interval: str | pd.Timedelta,
+    *,
+    as_of: datetime | pd.Timestamp | str | None = None,
+    timestamp_label: _TimestampLabel = "open",
+) -> pd.DataFrame:
+    """Drop bars whose close time is after ``as_of``.
+
+    Live providers may return the currently-forming candle. Hyperliquid and
+    CCXT label OHLCV rows by open time, and Delta Lab price rows have been
+    observed to expose the current hour too, so open-label filtering is the
+    conservative default for backtest data. If ``as_of`` is omitted, current
+    UTC is used; public fetch/backtest/live paths supply their own natural
+    cutoff internally.
+    """
+    if df.empty:
+        return df
+    if timestamp_label not in ("open", "close"):
+        raise ValueError("timestamp_label must be 'open' or 'close'")
+
+    idx = _as_utc_index(df.index)
+    close_times = idx if timestamp_label == "close" else idx + pd.Timedelta(interval)
+    completed = close_times <= _as_utc_timestamp(as_of)
+    return df.loc[completed]
 
 
 async def _delta_lab_timeseries_with_retry(**kwargs: Any) -> dict:
@@ -62,7 +118,7 @@ def get_available_date_range() -> tuple[datetime, datetime]:
     # because datetime.now() has a time component that makes midnight appear to fall
     # before "2025-08-11 14:30:00 - 211 days".
     retention_days = 211
-    newest = datetime.now()
+    newest = datetime.now(UTC).replace(tzinfo=None)
     oldest = (newest - timedelta(days=retention_days)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
@@ -88,8 +144,8 @@ def validate_date_range(start_date: str, end_date: str) -> tuple[bool, str | Non
     oldest, newest = get_available_date_range()
 
     try:
-        start = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date)
+        start = _parse_iso_naive_utc(start_date)
+        end = _parse_iso_naive_utc(end_date)
     except ValueError as e:
         return False, f"Invalid date format: {e}"
 
@@ -151,7 +207,7 @@ async def fetch_prices(
 
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
-    lookback_days = (end - start).days
+    lookback_days = _lookback_days_for_window(start, end)
 
     _SUB_HOURLY = {"1m", "5m", "15m"}
     _INTERVAL_TO_FREQ = {"1h": "1h", "4h": "4h", "1d": "1D"}
@@ -160,7 +216,7 @@ async def fetch_prices(
         source = "hyperliquid" if interval in _SUB_HOURLY else "delta_lab"
 
     if source == "ccxt":
-        return await _fetch_prices_ccxt(symbols, start, end, interval)
+        result = await _fetch_prices_ccxt(symbols, start, end, interval)
     elif source == "delta_lab":
         if interval in _SUB_HOURLY:
             raise ValueError(
@@ -172,11 +228,16 @@ async def fetch_prices(
             freq = _INTERVAL_TO_FREQ.get(interval)
             if freq:
                 result = result.resample(freq).last().dropna(how="all")
-        return result
     elif source == "hyperliquid":
-        return await _fetch_prices_hyperliquid(symbols, start, end, interval)
+        result = await _fetch_prices_hyperliquid(symbols, start, end, interval)
     else:
         raise ValueError(f"Unknown source: {source}")
+    return drop_incomplete_bars(
+        result,
+        interval,
+        as_of=end,
+        timestamp_label="open",
+    )
 
 
 async def _fetch_prices_delta_lab(
@@ -334,7 +395,7 @@ async def fetch_funding_rates(
 
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
-    lookback_days = (end - start).days
+    lookback_days = _lookback_days_for_window(start, end)
 
     all_funding = []
 
@@ -361,7 +422,13 @@ async def fetch_funding_rates(
 
     result = pd.concat(all_funding, axis=1)
     result.index = pd.to_datetime(result.index)
-    return result.sort_index()
+    result = result.sort_index()
+    return drop_incomplete_bars(
+        result,
+        "1h",
+        as_of=end,
+        timestamp_label="open",
+    )
 
 
 async def fetch_borrow_rates(
@@ -399,7 +466,7 @@ async def fetch_borrow_rates(
 
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
-    lookback_days = (end - start).days
+    lookback_days = _lookback_days_for_window(start, end)
 
     all_rates = []
 
@@ -430,7 +497,13 @@ async def fetch_borrow_rates(
 
     result = pd.concat(all_rates, axis=1)
     result.index = pd.to_datetime(result.index)
-    return result.sort_index()
+    result = result.sort_index()
+    return drop_incomplete_bars(
+        result,
+        "1h",
+        as_of=end,
+        timestamp_label="open",
+    )
 
 
 async def align_dataframes(
@@ -548,7 +621,7 @@ async def fetch_supply_rates(
 
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
-    lookback_days = (end - start).days
+    lookback_days = _lookback_days_for_window(start, end)
 
     all_rates = []
 
@@ -576,7 +649,13 @@ async def fetch_supply_rates(
 
     result = pd.concat(all_rates, axis=1)
     result.index = pd.to_datetime(result.index)
-    return result.sort_index()
+    result = result.sort_index()
+    return drop_incomplete_bars(
+        result,
+        "1h",
+        as_of=end,
+        timestamp_label="open",
+    )
 
 
 async def fetch_lending_rates(
@@ -617,7 +696,7 @@ async def fetch_lending_rates(
 
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
-    lookback_days = (end - start).days
+    lookback_days = _lookback_days_for_window(start, end)
 
     data = await DELTA_LAB_CLIENT.get_asset_timeseries(
         symbol=symbol,
@@ -665,7 +744,20 @@ async def fetch_lending_rates(
     supply.columns.name = None
     borrow.columns.name = None
 
-    return {"supply": supply, "borrow": borrow}
+    return {
+        "supply": drop_incomplete_bars(
+            supply,
+            "1h",
+            as_of=end,
+            timestamp_label="open",
+        ),
+        "borrow": drop_incomplete_bars(
+            borrow,
+            "1h",
+            as_of=end,
+            timestamp_label="open",
+        ),
+    }
 
 
 def convert_to_spot(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

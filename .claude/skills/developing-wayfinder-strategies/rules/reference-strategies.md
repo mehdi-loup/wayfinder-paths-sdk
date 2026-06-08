@@ -61,8 +61,10 @@ Before the runner can actually trade, two wallet conditions must hold. Missing e
    - Sum of `|weights|` per row must be ≤ `target_leverage`
 
 2. **`decide.py::decide(ctx: TriggerContext) -> None`**
-   - Read targets via `ctx.signal.targets.iloc[-1]` (live `ctx.t` is wall-clock,
-     doesn't align to bar index — exact-match `.loc[t]` will fail)
+   - Read targets via `ctx.signal_at_now()`. Do not use
+     `ctx.signal.targets.iloc[-1]`; live signal frames may contain more history than
+     the current completed signal bar, and exact-match `.loc[t]` can fail when
+     `ctx.t` is wall-clock.
    - Read NAV via `ctx.nav` — framework-owned, identical in backtest and live.
      **Never** call `await ctx.perp.get_margin_balance()` or `ctx.state.set("nav", ...)`
      from inside decide. Backtest's `BacktestHandler.get_margin_balance()` returns 0,

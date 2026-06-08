@@ -106,6 +106,7 @@ markers = [
     "smoke: Smoke tests for basic functionality validation",
     "requires_wallets: Tests requiring test wallets",
     "requires_config: Tests requiring config.json",
+    "live_data: Tests requiring public live market-data endpoints",
     "ref_reproduction: Full backtest-ref reproduction (slow; fetches the ref's audit window)"
 ]
 asyncio_mode = "auto"

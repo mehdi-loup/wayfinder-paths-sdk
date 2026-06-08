@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from wayfinder_paths.core.backtesting.data import drop_incomplete_bars
 from wayfinder_paths.core.backtesting.perps import (
     backtest_perps_trigger,
     default_decide,
@@ -146,9 +147,11 @@ async def assert_active_perps_backtest_runs(
         f"TriggerContext docs."
     )
 
-    assert len(result.equity_curve) == len(prices), (
-        f"backtest produced {len(result.equity_curve)} bars but prices has "
-        f"{len(prices)} — driver bailed early"
+    expected_prices = drop_incomplete_bars(prices, interval, timestamp_label="open")
+    assert len(result.equity_curve) == len(expected_prices), (
+        f"backtest produced {len(result.equity_curve)} bars but expected "
+        f"{len(expected_prices)} completed bars from {len(prices)} raw bars — "
+        "driver bailed early or failed to apply completed-bar filtering"
     )
 
     if expect_trades:
