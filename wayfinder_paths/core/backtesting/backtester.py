@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from wayfinder_paths.core.backtesting.data import drop_incomplete_bars
 from wayfinder_paths.core.backtesting.stats import calculate_stats
 from wayfinder_paths.core.backtesting.types import (
     BacktestConfig,
@@ -28,6 +29,24 @@ from wayfinder_paths.core.backtesting.utils import (
     get_maintenance_margin_rate,
     validate_target_positions,
 )
+
+
+def _infer_bar_interval(index: pd.Index) -> str:
+    if len(index) < 2:
+        return "1h"
+    diffs = pd.Series(index).diff().dropna()
+    seconds = float(diffs.median().total_seconds())
+    if seconds <= 60:
+        return "1m"
+    if seconds <= 5 * 60:
+        return "5m"
+    if seconds <= 15 * 60:
+        return "15m"
+    if seconds <= 60 * 60:
+        return "1h"
+    if seconds <= 4 * 60 * 60:
+        return "4h"
+    return "1d"
 
 
 def get_atomic_trade_scale(
@@ -118,6 +137,25 @@ def run_backtest(
 
     if not prices.index.equals(target_positions.index):
         raise ValueError("Prices and target_positions must have the same index")
+
+    if config.enforce_completed_bars:
+        interval = config.bar_interval or _infer_bar_interval(prices.index)
+        prices = drop_incomplete_bars(
+            prices,
+            interval,
+            timestamp_label=config.bar_timestamp_label,
+        )
+        if prices.empty:
+            raise ValueError(
+                "No completed price bars remain after dropping incomplete bars"
+            )
+        target_positions = target_positions.loc[prices.index]
+        if config.funding_rates is not None:
+            config.funding_rates = drop_incomplete_bars(
+                config.funding_rates,
+                interval,
+                timestamp_label=config.bar_timestamp_label,
+            )
 
     symbols = list(prices.columns)
     if not all(sym in target_positions.columns for sym in symbols):

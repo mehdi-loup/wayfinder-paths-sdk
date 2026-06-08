@@ -119,7 +119,8 @@ All end-to-end helpers set this automatically.
 
 ## Gotchas
 
-- **Look-ahead bias**: never use future data in signals
+- **Completed bars only**: never use the final in-progress candle as signal data. Treat fetched OHLCV/time-series rows as open-labeled unless the source explicitly says otherwise; the framework should drop rows whose close is after its cutoff. Report the last raw bar, last completed bar, and dropped incomplete-bar count when summarizing a backtest.
+- **Look-ahead bias**: never use future data in signals. Research backtests must use `fill_model="next_bar_open"` so signals formed on bar `t` enter on bar `t+1`; `fill_model="replay"` is only for live/history reconciliation.
 - **Wrong `periods_per_year`**: Sharpe/volatility will be meaningless; `quick_backtest` sets it automatically
 - **Leveraged yield**: bake leverage into synthetic price, don't use `config.leverage`
 - **`fetch_lending_rates`** returns per-venue data; `fetch_supply_rates`/`fetch_borrow_rates` return symbol-level averages

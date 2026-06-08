@@ -322,7 +322,10 @@ class LiveHandler:
         end = datetime.now(UTC)
         start = end - timedelta(days=days)
         return await fetch_prices(
-            symbols, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), "1h"
+            symbols,
+            start.isoformat(),
+            end.isoformat(),
+            "1h",
         )
 
     async def _fetch_funding_delta_lab(
@@ -338,7 +341,9 @@ class LiveHandler:
         end = datetime.now(UTC)
         start = end - timedelta(days=days)
         return await fetch_funding_rates(
-            symbols, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+            symbols,
+            start.isoformat(),
+            end.isoformat(),
         )
 
     async def _fetch_prices_hl(

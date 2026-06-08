@@ -35,6 +35,8 @@ Three handler implementations satisfy the same `MarketHandler` protocol:
 - `LiveHandler` — wraps `HyperliquidAdapter`.
 - `ReconcileHandler` — records intents only, reads positions from `StateStore.snapshot_at(t)`.
 
+Completed-bar rule: signal inputs must exclude the currently-forming candle. If a provider returns the current hour's OHLCV row, the framework drops it before `signal_fn`; live snapshots record both `latest_raw_bar_ts` and `signal_bar_ts`. Do not place or defend trades that used an in-progress bar.
+
 ## Workflow
 
 1. Write `signal.py` with `compute_signal(prices, funding, params) -> SignalFrame`.

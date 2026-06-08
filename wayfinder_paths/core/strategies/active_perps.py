@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Final, final
 
 import pandas as pd
 
+from wayfinder_paths.core.backtesting.data import drop_incomplete_bars
 from wayfinder_paths.core.backtesting.ref import BacktestRef, load_ref
 from wayfinder_paths.core.perps.context import (
     SignalFrame,
@@ -206,14 +207,48 @@ class ActivePerpsStrategy(Strategy):
 
         perp = RecordingHandler(raw_perp)
         hip3 = {k: RecordingHandler(h) for k, h in raw_hip3.items()}
+        trigger_t = perp.now()
 
         prices, funding = await self._fetch_recent_data(raw_perp)
+        interval = self._ref.data.interval or "1h"
+        latest_raw_bar_ts = None
+        if isinstance(prices, pd.DataFrame) and not prices.empty:
+            latest_raw_bar_ts = pd.Timestamp(prices.index[-1]).isoformat()
+        raw_bar_count = len(prices) if isinstance(prices, pd.DataFrame) else 0
+        prices = drop_incomplete_bars(
+            prices,
+            interval,
+            as_of=trigger_t,
+            timestamp_label="open",
+        )
+        dropped_incomplete_bars = raw_bar_count - len(prices)
+        if prices.empty:
+            return (
+                False,
+                "No completed price bars available; skipped trigger to avoid "
+                "trading on an in-progress candle",
+            )
+        signal_bar_ts = pd.Timestamp(prices.index[-1]).isoformat()
+        if isinstance(funding, pd.DataFrame) and not funding.empty:
+            funding = drop_incomplete_bars(
+                funding,
+                interval,
+                as_of=trigger_t,
+                timestamp_label="open",
+            )
+            funding = (
+                funding.reindex(
+                    index=prices.index,
+                    columns=prices.columns,
+                )
+                .ffill()
+                .fillna(0.0)
+            )
         raw_signal = self._signal_fn(prices, funding, dict(self._ref.params))
         signal_frame = normalize_signal(
             raw_signal, fallback_columns=self._ref.data.symbols
         )
 
-        trigger_t = perp.now()
         # NAV from the exchange-of-record; decide must read ctx.nav, not call
         # get_margin_balance() itself (see TriggerContext).
         nav = float(await perp.get_margin_balance())
@@ -288,6 +323,10 @@ class ActivePerpsStrategy(Strategy):
                 "mids": mids_snapshot,
                 "signal_row": signal_row_serialised,
                 "trigger_ts": trigger_t.isoformat(),
+                "latest_raw_bar_ts": latest_raw_bar_ts,
+                "signal_bar_ts": signal_bar_ts,
+                "dropped_incomplete_bars": dropped_incomplete_bars,
+                "bar_interval": interval,
                 "nav": nav,
                 "params_hash": params_hash,
                 "cost_bps_applied": cost_bps_applied,

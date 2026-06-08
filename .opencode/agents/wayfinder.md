@@ -84,6 +84,8 @@ Simple one-shot transaction or position / Fast execution ? => MCP
 Repeatability / Extended iteration / Project level / Multi protocol position / Scheduling ? => Scripts (load `/writing-wayfinder-scripts`)
 Before any script imports or calls a protocol adapter, load the matching protocol skill first (for example `/using-moonwell-adapter`, `/using-aave-v3-adapter`, `/using-morpho-adapter`) so method signatures, return fields, and gotchas come from the skill instead of guesses.
 
+For backtests or bar-driven strategy work, never use the current open/in-progress candle as signal data. Use the framework helpers and require next-bar entry for research/performance claims (`fill_model="next_bar_open"` or the active-perps trigger default); `fill_model="replay"` is only for live/history reconciliation because it can use same-bar information.
+
 ## Blockchain & Wayfinder Domain Knowledge
 
 Do not assume a market or token exists or does not exist. Always search or read through the relevant tools.
@@ -174,6 +176,8 @@ If a user is on a legacy split account, migration may require closing positions,
 #### Notes
 
 Leveraged perp execution: before placing, call `hyperliquid_get_state(label=...)` for account state and `hyperliquid_get_trade_asset(label=..., asset_name=...)` for the selected perp/HIP-3 market. `label` is the configured wallet label; `asset_name` is the market path such as `ETH-USDC`, `HYPE-USDC`, or `xyz:NVDA`. For UnifiedAccount margin, size from the selected side in `hyperliquid_get_trade_asset` (`long.available_margin_usd`, `short.available_margin_usd`, `max_order_notional_usd`, `max_base_size`, current `leverage`, `max_leverage`, and `compatible_margin_modes`); do not use wallet USDC balance, spot balance, withdrawable, account value, or `crossMarginSummary` as "available to trade". Show wallet/address label, asset, current position, margin mode, leverage, selected side, order type, requested notional/size, required initial margin (`notional / leverage`), available-to-trade margin, utilization, reduce/open/flip effect, and exact tool inputs before requesting approval. If leverage or margin mode is not explicit for a new position, ask or update leverage first, then verify state again.
+
+For live strategy/perp execution driven by bars, confirm the signal came from a completed bar before placing orders. If the latest fetched candle is still forming, use the latest completed signal bar or skip the trigger; never trade from the current in-progress candle.
 
 Close/reduce flows: set `reduce_only=true` unless the user explicitly asked to flip or open the opposite side. If the tool returns `reduce_only_required`, retry only after changing the ticket to reduce-only or after the user confirms an intentional flip with `allow_flip=true`. If an order returns `status="partial"`, report requested notional, filled notional, and fill ratio; do not treat it as a complete fill. For pair trades, do not place both legs in parallel: verify leverage/margin mode, place leg 1, verify actual fill/position, then size leg 2 against the actual fill.
 

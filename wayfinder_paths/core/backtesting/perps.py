@@ -19,6 +19,7 @@ import pandas as pd
 
 from wayfinder_paths.core.backtesting.data import (
     align_dataframes,
+    drop_incomplete_bars,
     fetch_funding_rates,
     fetch_prices,
 )
@@ -90,6 +91,8 @@ async def backtest_perps_trigger(
     prices: pd.DataFrame | None = None,
     funding: pd.DataFrame | None = None,
     sz_decimals: dict[str, int] | None = None,
+    enforce_completed_bars: bool = True,
+    bar_timestamp_label: str = "open",
 ) -> BacktestResult:
     """Run a trigger-pattern perps backtest.
 
@@ -123,6 +126,23 @@ async def backtest_perps_trigger(
 
     if not isinstance(prices.index, pd.DatetimeIndex):
         prices.index = pd.to_datetime(prices.index)
+
+    if enforce_completed_bars:
+        prices = drop_incomplete_bars(
+            prices,
+            interval,
+            timestamp_label=bar_timestamp_label,  # type: ignore[arg-type]
+        )
+        if prices.empty:
+            raise ValueError(
+                "No completed price bars remain after dropping incomplete bars"
+            )
+        if funding is not None:
+            funding = drop_incomplete_bars(
+                funding,
+                interval,
+                timestamp_label=bar_timestamp_label,  # type: ignore[arg-type]
+            )
 
     prices = prices[symbols].copy()
     if funding is not None:
