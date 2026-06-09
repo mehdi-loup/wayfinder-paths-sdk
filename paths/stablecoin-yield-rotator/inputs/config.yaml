@@ -1,0 +1,16 @@
+wallet: main
+chains: [1, 8453, 42161, 999]
+assets: [USDC, USDT, DAI]
+# sparklend is read-only in this adapter (no lend/unlend exposed); excluded from
+# the default executable set. Re-add only when SparkLendAdapter exposes supply/withdraw.
+venues: [aave_v3, morpho_blue_market, morpho_vault, euler_v2, hyperlend, moonwell]
+constraints:
+  min_apy_delta_bps: 50
+  gas_amortization_days: 30
+  max_gas_usd_per_rotation: 25
+  max_position_pct_per_venue: 50
+  min_scan_tvl_usd: 100000
+  max_scan_apy: 0.5
+  blocklist_markets: []
+slippage_bps: 30
+ledger_record: true
