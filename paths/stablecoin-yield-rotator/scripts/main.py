@@ -42,6 +42,7 @@ from rotation import (  # noqa: E402
 )
 from venues import (  # noqa: E402
     EXECUTABLE_VENUES,
+    PRINCIPAL_RISK_VENUES,
     Position,
     VenueRow,
     lend,
@@ -193,6 +194,7 @@ def _scan_exclusion_reason(row: VenueRow, config: dict[str, Any]) -> str | None:
     max_apy = float(max_apy_raw) if max_apy_raw is not None else None
     min_tvl_usd_raw = constraints.get("min_scan_tvl_usd")
     min_tvl_usd = float(min_tvl_usd_raw) if min_tvl_usd_raw is not None else None
+    include_principal_risk = bool(config.get("include_principal_risk_venues", False))
 
     # Rows that are visible but not eligible as targets — keep them out of `ranked` so
     # consumers (applets/users) don't treat them as actionable.
@@ -200,6 +202,8 @@ def _scan_exclusion_reason(row: VenueRow, config: dict[str, Any]) -> str | None:
         return str(row.extra.get("frozen_reason") or "frozen")
     if row.is_paused:
         return "paused"
+    if row.venue in PRINCIPAL_RISK_VENUES and not include_principal_risk:
+        return "principal-risk venue (set include_principal_risk_venues to enable)"
     if row.asset_address.strip().lower() in {"", "none", "0x0000000000000000000000000000000000000000"}:
         return "missing underlying asset address"
     if max_apy is not None and row.supply_apy > max_apy:
@@ -333,11 +337,13 @@ async def action_deposit(config: dict[str, Any], asset: str, human_amount: float
     min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
     raw_amount = _to_raw(asset, human_amount)
 
+    include_principal_risk = bool(config.get("include_principal_risk_venues", False))
     scan_config = {**config, "assets": [asset]}
     scan = await _scan_all_cached(scan_config)
     candidates = sorted(
         [r for r in scan if r.asset_symbol == asset and r.venue in EXECUTABLE_VENUES
-         and not r.is_frozen and not r.is_paused],
+         and not r.is_frozen and not r.is_paused
+         and (include_principal_risk or r.venue not in PRINCIPAL_RISK_VENUES)],
         key=lambda r: r.supply_apy,
         reverse=True,
     )
@@ -616,7 +622,7 @@ async def _execute_leg(
         raise RuntimeError(f"target re-check failed before withdraw: {target_recheck['reason']}")
     receipts["target_recheck_before_withdraw"] = target_recheck
 
-    # A venue may redeem less than the planned amount (e.g. an ERC-4626 maxRedeem cap),
+    # A venue may redeem less than the planned amount (e.g. Avantis clamps to maxRedeem),
     # so measure the source underlying balance across the withdraw and spend only what
     # actually came back — never the planned amount.
     if not leg.from_asset_address:
@@ -752,6 +758,7 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
             if constraints.get("max_scan_apy") is not None
             else DEFAULT_MAX_STABLECOIN_APY
         ),
+        include_principal_risk_venues=bool(config.get("include_principal_risk_venues", False)),
     )
 
     # Post-process: attach a real BRAP quote to every cross-chain leg so the user can

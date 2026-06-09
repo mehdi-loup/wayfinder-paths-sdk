@@ -430,48 +430,271 @@ async def test_moonwell_unlend_errors_when_no_position():
 
 
 # ---------------------------------------------------------------------------
-# Frozen-venue rotation + scan classification (general)
+# Avantis (avUSDC ERC-4626 perp-LP vault) — scan/positions + lend/unlend glue
 # ---------------------------------------------------------------------------
+
+AVANTIS_VAULT = "0x944766f715b51967E56aFdE5f0Aa76cEaCc9E7f9"
+
+
+async def test_avantis_scan_uses_junior_apy_and_usdc_underlying():
+    from venues import _scan_avantis  # noqa: PLC0415
+
+    adapter = AsyncMock()
+    adapter.get_all_markets = AsyncMock(return_value=(True, [{
+        "vault": AVANTIS_VAULT,
+        "underlying": USDC_ADDRESS,
+        "symbol": "avUSDC",
+        "name": "Avantis USDC",
+        "decimals": 6,
+        "tvl": 5_000_000_000_000,  # 5M USDC in base units
+        "share_price": 1_050_000,
+    }]))
+    adapter.fetch_trailing_apy = AsyncMock(return_value=(True, {"jr_apy": 0.123, "sr_apy": 0.04, "days": 7}))
+
+    rows = await _scan_avantis(adapter, chain_id=8453, allowed={"USDC", "USDT", "DAI"})
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.venue == "avantis"
+    assert row.asset_symbol == "USDC"
+    assert row.asset_address == USDC_ADDRESS
+    assert row.market_id == AVANTIS_VAULT
+    assert row.supply_apy == pytest.approx(0.123)  # junior tranche APY
+    assert row.tvl_usd == pytest.approx(5_000_000.0)
+
+
+async def test_avantis_scan_freezes_row_on_nav_drawdown():
+    from venues import _scan_avantis  # noqa: PLC0415
+
+    adapter = AsyncMock()
+    adapter.get_all_markets = AsyncMock(return_value=(True, [{
+        "vault": AVANTIS_VAULT, "underlying": USDC_ADDRESS, "symbol": "avUSDC",
+        "name": "Avantis USDC", "decimals": 6, "tvl": 5_000_000_000_000, "share_price": 990_000,
+    }]))
+    # Negative trailing junior return == share price fell over the window.
+    adapter.fetch_trailing_apy = AsyncMock(return_value=(True, {"jr_apy": -0.05, "sr_apy": 0.03, "days": 7}))
+
+    rows = await _scan_avantis(adapter, chain_id=8453, allowed={"USDC"})
+
+    assert len(rows) == 1
+    assert rows[0].is_frozen is True
+    assert rows[0].supply_apy == pytest.approx(-0.05)
+    assert "drawdown" in rows[0].extra["frozen_reason"]
+
+
+async def test_avantis_drawdown_row_excluded_as_rotation_target():
+    from rotation import quote_rotation  # noqa: PLC0415
+    from venues import VenueRow  # noqa: PLC0415
+
+    frozen_avantis = VenueRow(
+        venue="avantis", chain_id=8453, asset_symbol="USDC",
+        asset_address=USDC_ADDRESS, market_id=AVANTIS_VAULT, decimals=6,
+        supply_apy=0.12, utilization=None, supply_cap_headroom_raw=None,
+        tvl_usd=20_000_000.0, is_frozen=True,
+    )
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.040), frozen_avantis]
+    positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
+
+    plan = quote_rotation(scan=scan, positions=positions, min_apy_delta_bps=50, max_position_pct_per_venue=100)
+
+    # Even at a headline 12% APY, the frozen vault is never chosen as a target.
+    assert all(leg.to_venue != "avantis" for leg in plan.legs)
 
 
 async def test_position_in_frozen_venue_is_rotated_out_not_ignored():
     """A frozen row blocks *entry* (target) but must not strand funds already there:
     a holder of the frozen venue is still offered a rotation *out*."""
     from rotation import quote_rotation  # noqa: PLC0415
+    from venues import VenueRow  # noqa: PLC0415
 
     frozen_source = VenueRow(
-        venue="moonwell", chain_id=8453, asset_symbol="USDC",
-        asset_address=USDC_ADDRESS, market_id="0xFROZENMW", decimals=6,
-        supply_apy=0.02, utilization=0.5, supply_cap_headroom_raw=None,
+        venue="avantis", chain_id=8453, asset_symbol="USDC",
+        asset_address=USDC_ADDRESS, market_id=AVANTIS_VAULT, decimals=6,
+        supply_apy=0.02, utilization=None, supply_cap_headroom_raw=None,
         tvl_usd=20_000_000.0, is_frozen=True,
     )
     better = _make_row("aave_v3", USDC_ADDRESS, 0.06)
     scan = [frozen_source, better]
-    positions = [_make_position("moonwell", "0xFROZENMW", 100_000 * 10**6)]
+    positions = [_make_position("avantis", AVANTIS_VAULT, 100_000 * 10**6)]
 
     plan = quote_rotation(scan=scan, positions=positions, min_apy_delta_bps=50, max_position_pct_per_venue=100)
 
     assert plan.legs
-    assert plan.legs[0].from_venue == "moonwell"  # rotated OUT of the frozen venue
+    assert plan.legs[0].from_venue == "avantis"  # rotated OUT of the frozen venue
     assert plan.legs[0].to_venue == "aave_v3"
 
 
-async def test_scan_moves_frozen_rows_to_excluded():
-    """Frozen rows (e.g. the deduped Moonwell duplicate) must not appear in the ranked set."""
+async def test_principal_risk_venue_excluded_as_rotation_target_unless_opted_in():
+    """Finding 1: Avantis must not be a default rotation target purely on high APY."""
+    from rotation import quote_rotation  # noqa: PLC0415
+    from venues import VenueRow  # noqa: PLC0415
+
+    avantis = VenueRow(
+        venue="avantis", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
+        market_id=AVANTIS_VAULT, decimals=6, supply_apy=0.20, utilization=None,
+        supply_cap_headroom_raw=None, tvl_usd=30_000_000.0,
+    )
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.04), avantis]
+    positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
+
+    default = quote_rotation(scan=scan, positions=positions, min_apy_delta_bps=50, max_position_pct_per_venue=100)
+    assert all(leg.to_venue != "avantis" for leg in default.legs)
+
+    opted_in = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, include_principal_risk_venues=True,
+    )
+    assert opted_in.legs and opted_in.legs[0].to_venue == "avantis"
+
+
+async def test_deposit_skips_principal_risk_venue_by_default(fake_signing_callback):
+    """Finding 1: a fresh deposit must not route into Avantis just because its APY ranks top."""
+    avantis = VenueRow(
+        venue="avantis", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
+        market_id=AVANTIS_VAULT, decimals=6, supply_apy=0.20, utilization=None,
+        supply_cap_headroom_raw=None, tvl_usd=30_000_000.0,
+    )
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.04), avantis]
+    fake_lend = AsyncMock(return_value=(True, {"hash": "0xD"}))
+    with (
+        patch("main.scan_all", AsyncMock(return_value=scan)),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+        patch("main._recheck_target_before_deposit", AsyncMock(return_value={"ok": True})),
+        patch("main._check_gas_for_chains", AsyncMock(return_value={"insufficient": []})),
+        patch("main.lend", fake_lend),
+    ):
+        await rotator.action_deposit(CONFIG, asset="USDC", human_amount=100.0)
+
+    assert fake_lend.await_args.kwargs["venue"] == "aave_v3"
+    assert fake_lend.await_args.kwargs["market_id"] == USDC_ADDRESS
+
+
+async def test_scan_moves_frozen_and_principal_risk_rows_to_excluded():
+    """Finding 3: frozen / principal-risk rows must not appear in the ranked (actionable) set."""
     frozen = VenueRow(
         venue="moonwell", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
         market_id="0xFROZEN", decimals=6, supply_apy=0.05, utilization=0.5,
         supply_cap_headroom_raw=None, tvl_usd=5_000_000.0, is_frozen=True,
         extra={"frozen_reason": "duplicate Moonwell market"},
     )
+    avantis = VenueRow(
+        venue="avantis", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
+        market_id=AVANTIS_VAULT, decimals=6, supply_apy=0.20, utilization=None,
+        supply_cap_headroom_raw=None, tvl_usd=30_000_000.0,
+    )
     normal = _make_row("aave_v3", USDC_ADDRESS, 0.04)
     normal.tvl_usd = 5_000_000.0
-    with patch("main.scan_all", AsyncMock(return_value=[frozen, normal])):
+    with patch("main.scan_all", AsyncMock(return_value=[frozen, avantis, normal])):
         result = await rotator.action_scan(CONFIG)
 
     assert {r["market_id"] for r in result["ranked"]} == {USDC_ADDRESS}
     excluded = {r["market_id"]: r["exclude_reason"] for r in result["excluded"]}
     assert "duplicate Moonwell market" in excluded["0xFROZEN"]
+    assert "principal-risk" in excluded[AVANTIS_VAULT]
+
+
+async def test_avantis_scan_skips_when_usdc_not_allowed():
+    from venues import _scan_avantis  # noqa: PLC0415
+
+    adapter = AsyncMock()
+    rows = await _scan_avantis(adapter, chain_id=8453, allowed={"DAI"})
+
+    assert rows == []
+    adapter.get_all_markets.assert_not_awaited()
+
+
+async def test_avantis_positions_reports_underlying_assets():
+    from venues import _avantis_positions  # noqa: PLC0415
+
+    adapter = AsyncMock()
+    adapter.vault = AVANTIS_VAULT
+    adapter.get_pos = AsyncMock(return_value=(True, {
+        "assets_balance": 250_000_000,
+        "shares_balance": 238_000_000,
+        "underlying_token": USDC_ADDRESS,
+        "decimals": 6,
+    }))
+
+    positions = await _avantis_positions(adapter, chain_id=8453, allowed={"USDC"}, account=WALLET_ADDRESS)
+
+    assert len(positions) == 1
+    assert positions[0].market_id == AVANTIS_VAULT
+    assert positions[0].supply_raw == 250_000_000
+    assert positions[0].asset_symbol == "USDC"
+
+
+async def test_avantis_lend_dispatcher_deposits_underlying():
+    from venues import lend  # noqa: PLC0415
+
+    fake_adapter = AsyncMock()
+    fake_adapter.deposit = AsyncMock(return_value=(True, "0xDEPOSIT"))
+
+    with patch("venues.get_write_adapter", AsyncMock(return_value=fake_adapter)):
+        ok, tx = await lend(
+            venue="avantis", wallet_label="main", chain_id=8453,
+            market_id=AVANTIS_VAULT, raw_amount=100_000_000,
+        )
+
+    assert ok and tx == "0xDEPOSIT"
+    fake_adapter.deposit.assert_awaited_once_with(vault_address=AVANTIS_VAULT, amount=100_000_000)
+
+
+async def test_avantis_unlend_full_redeems_via_redeem_full():
+    from venues import unlend  # noqa: PLC0415
+
+    fake_adapter = AsyncMock()
+    fake_adapter.withdraw = AsyncMock(return_value=(True, "0xREDEEM"))
+
+    with patch("venues.get_write_adapter", AsyncMock(return_value=fake_adapter)):
+        ok, tx = await unlend(
+            venue="avantis", wallet_label="main", chain_id=8453,
+            market_id=AVANTIS_VAULT, raw_amount=0, withdraw_full=True,
+        )
+
+    assert ok and tx == "0xREDEEM"
+    fake_adapter.withdraw.assert_awaited_once_with(
+        vault_address=AVANTIS_VAULT, amount=0, redeem_full=True,
+    )
+
+
+async def test_avantis_unlend_partial_converts_assets_to_shares_and_clamps(monkeypatch):
+    from contextlib import asynccontextmanager  # noqa: PLC0415
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    import venues  # noqa: PLC0415
+
+    fake_adapter = AsyncMock()
+    fake_adapter.wallet_address = WALLET_ADDRESS
+    fake_adapter.withdraw = AsyncMock(return_value=(True, "0xREDEEM"))
+
+    # Vault contract: convertToShares(assets) -> shares; maxRedeem(account) -> cap.
+    convert = AsyncMock(return_value=95_000_000)
+    max_redeem = AsyncMock(return_value=40_000_000)  # cap below the converted shares
+    contract = MagicMock()
+    contract.functions.convertToShares = MagicMock(return_value=MagicMock(call=convert))
+    contract.functions.maxRedeem = MagicMock(return_value=MagicMock(call=max_redeem))
+    web3 = MagicMock()
+    web3.eth.contract = MagicMock(return_value=contract)
+    web3.to_checksum_address = lambda a: a
+
+    @asynccontextmanager
+    async def fake_web3(_chain_id):
+        yield web3
+
+    monkeypatch.setattr(venues, "web3_from_chain_id", fake_web3)
+
+    with patch("venues.get_write_adapter", AsyncMock(return_value=fake_adapter)):
+        ok, _ = await venues.unlend(
+            venue="avantis", wallet_label="main", chain_id=8453,
+            market_id=AVANTIS_VAULT, raw_amount=100_000_000, withdraw_full=False,
+        )
+
+    assert ok
+    # converted shares (95M) exceed maxRedeem (40M) -> clamp to the cap.
+    fake_adapter.withdraw.assert_awaited_once_with(
+        vault_address=AVANTIS_VAULT, amount=40_000_000, redeem_full=False,
+    )
+
 
 async def test_quote_rotation_returns_plan(fake_signing_callback):
     scan = [

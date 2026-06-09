@@ -23,6 +23,7 @@ from typing import Any
 from loguru import logger
 
 from wayfinder_paths.adapters.aave_v3_adapter import AaveV3Adapter
+from wayfinder_paths.adapters.avantis_adapter import AvantisAdapter
 from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
 from wayfinder_paths.adapters.hyperlend_adapter.adapter import HyperlendAdapter
 from wayfinder_paths.adapters.moonwell_adapter import MoonwellAdapter
@@ -42,16 +43,28 @@ VENUE_CHAIN_SUPPORT: dict[str, set[int]] = {
     "euler_v2": {1, 8453, 42161},
     "hyperlend": {999},
     "moonwell": {8453},
+    "avantis": {8453},
 }
 
 # Venues whose adapter exposes lend/unlend in this repo. SparkLend is currently
 # read-only via the path because SparkLendAdapter has no supply/withdraw methods.
-EXECUTABLE_VENUES: set[str] = {"aave_v3", "morpho_blue_market", "morpho_vault", "euler_v2", "hyperlend", "moonwell"}
+EXECUTABLE_VENUES: set[str] = {"aave_v3", "morpho_blue_market", "morpho_vault", "euler_v2", "hyperlend", "moonwell", "avantis"}
+
+# Venues whose principal is NOT lending-risk-only (e.g. avUSDC is a perp-DEX junior
+# tranche whose NAV can draw down on trader PnL). They stay visible in scans and can
+# be rotated *out of*, but are excluded as deposit / rotation *targets* unless the
+# caller opts in via config `include_principal_risk_venues: true`.
+PRINCIPAL_RISK_VENUES: set[str] = {"avantis"}
 
 ALLOWED_STABLES = {"USDC", "USDT", "DAI"}
 
 # Moonwell mToken exchange-rate scaling (matches the adapter's own 1e18 convention).
 MANTISSA = 10**18
+
+# Avantis avUSDC is a perp-DEX junior tranche: its NAV can draw down on trader PnL.
+# A negative trailing return means the share price fell over the window — freeze the
+# venue so the rotator won't deposit into / rotate toward a vault that's losing principal.
+AVANTIS_MIN_TRAILING_APY = 0.0
 
 
 @dataclass
@@ -650,6 +663,72 @@ async def _moonwell_positions(adapter: MoonwellAdapter, chain_id: int, allowed: 
 
 
 # ---------------------------------------------------------------------------
+# Avantis (avUSDC ERC-4626 LP vault on Base)
+# NOTE: this is the junior tranche of a perp DEX's liquidity pool, NOT a lending
+# market — share price can draw down on trader PnL and redemptions can be capped
+# by maxRedeem. Different risk class from the lending venues above.
+# ---------------------------------------------------------------------------
+
+async def _scan_avantis(adapter: AvantisAdapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
+    if not _matches_asset("USDC", allowed):
+        return []
+    ok, markets = await adapter.get_all_markets()
+    if not ok or not isinstance(markets, list):
+        raise RuntimeError(f"avantis get_all_markets failed on chain {chain_id}: {markets}")
+    ok_apy, apy = await adapter.fetch_trailing_apy()
+    if not ok_apy or not isinstance(apy, dict):
+        raise RuntimeError(f"avantis fetch_trailing_apy failed on chain {chain_id}: {apy}")
+    jr_apy = float(apy.get("jr_apy") or 0.0)  # avUSDC is the junior tranche
+    # Drawdown guard: a negative trailing return == NAV decline; freeze so the row
+    # stays visible in scans but is excluded as a deposit / rotation target.
+    in_drawdown = jr_apy < AVANTIS_MIN_TRAILING_APY
+    rows: list[VenueRow] = []
+    for m in markets:
+        decimals = int(m.get("decimals") or 6)
+        tvl_raw = int(m.get("tvl") or 0)
+        extra: dict[str, Any] = {"name": m.get("name"), "symbol": m.get("symbol"), "share_price": m.get("share_price")}
+        if in_drawdown:
+            extra["frozen_reason"] = f"trailing jr_apy {jr_apy:.2%} < {AVANTIS_MIN_TRAILING_APY:.2%} (NAV drawdown)"
+        rows.append(VenueRow(
+            venue="avantis",
+            chain_id=chain_id,
+            asset_symbol="USDC",
+            asset_address=str(m.get("underlying") or ""),
+            market_id=str(m.get("vault")),
+            decimals=decimals,
+            supply_apy=jr_apy,
+            utilization=None,
+            supply_cap_headroom_raw=None,
+            tvl_usd=tvl_raw / (10**decimals),  # USDC ~ $1
+            is_frozen=in_drawdown,
+            extra=extra,
+        ))
+    return rows
+
+
+async def _avantis_positions(adapter: AvantisAdapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
+    if not _matches_asset("USDC", allowed):
+        return []
+    ok, pos = await adapter.get_pos(account=account)
+    if not ok or not isinstance(pos, dict):
+        raise RuntimeError(f"avantis get_pos failed on chain {chain_id}: {pos}")
+    assets = int(pos.get("assets_balance") or 0)
+    if assets <= 0:
+        return []
+    decimals = int(pos.get("decimals") or 6)
+    return [Position(
+        venue="avantis",
+        chain_id=chain_id,
+        asset_symbol="USDC",
+        asset_address=str(pos.get("underlying_token") or ""),
+        market_id=adapter.vault,
+        decimals=decimals,
+        supply_raw=assets,
+        supply_usd=assets / (10**decimals),
+    )]
+
+
+# ---------------------------------------------------------------------------
 # Adapter factories
 # ---------------------------------------------------------------------------
 
@@ -668,6 +747,8 @@ async def get_read_adapter(venue: str) -> Any:
         return await get_adapter(HyperlendAdapter)
     if venue == "moonwell":
         return await get_adapter(MoonwellAdapter)
+    if venue == "avantis":
+        return await get_adapter(AvantisAdapter)
     raise ValueError(f"unknown venue: {venue}")
 
 
@@ -692,6 +773,8 @@ async def get_write_adapter(venue: str, wallet_label: str) -> Any:
         return await get_adapter(HyperlendAdapter, wallet_label)
     if venue == "moonwell":
         return await get_adapter(MoonwellAdapter, wallet_label)
+    if venue == "avantis":
+        return await get_adapter(AvantisAdapter, wallet_label)
     raise ValueError(f"unknown venue: {venue}")
 
 
@@ -707,6 +790,7 @@ _SCAN_FNS = {
     "euler_v2": _scan_euler_v2,
     "hyperlend": _scan_hyperlend,
     "moonwell": _scan_moonwell,
+    "avantis": _scan_avantis,
 }
 
 _POSITION_FNS = {
@@ -717,6 +801,7 @@ _POSITION_FNS = {
     "euler_v2": _euler_positions,
     "hyperlend": _hyperlend_positions,
     "moonwell": _moonwell_positions,
+    "avantis": _avantis_positions,
 }
 
 
@@ -840,6 +925,9 @@ async def lend(venue: str, wallet_label: str, chain_id: int, market_id: str, raw
         if not ok_pos or not isinstance(pos, dict):
             return False, {"error": f"moonwell underlying lookup failed at {market_id}: {pos}"}
         return await adapter.lend(mtoken=market_id, underlying_token=str(pos["underlying_token"]), amount=raw_amount)
+    if venue == "avantis":
+        # ERC-4626 deposit() takes underlying assets (USDC base units).
+        return await adapter.deposit(vault_address=market_id, amount=raw_amount)
     raise ValueError(f"unknown venue: {venue}")
 
 
@@ -897,6 +985,20 @@ async def unlend(venue: str, wallet_label: str, chain_id: int, market_id: str, r
             redeem_amount = (int(raw_amount) * MANTISSA) // exchange_rate if exchange_rate else mtoken_balance
             redeem_amount = min(redeem_amount, mtoken_balance)
         return await adapter.unlend(mtoken=market_id, amount=redeem_amount)
+    if venue == "avantis":
+        # withdraw() redeems *shares*, not underlying assets, and exposes no
+        # asset->share helper; convert via the vault's ERC-4626 rate and clamp
+        # to the wallet's redeemable shares.
+        if withdraw_full or raw_amount <= 0:
+            return await adapter.withdraw(vault_address=market_id, amount=0, redeem_full=True)
+        account = _wallet_address_for_unlend(adapter)
+        async with web3_from_chain_id(chain_id) as web3:
+            vault = web3.eth.contract(address=web3.to_checksum_address(market_id), abi=ERC4626_ABI)
+            shares = int(await vault.functions.convertToShares(int(raw_amount)).call(block_identifier="latest") or 0)
+            max_shares = int(await vault.functions.maxRedeem(web3.to_checksum_address(account)).call(block_identifier="latest") or 0)
+        if max_shares <= 0:
+            return False, {"error": f"no Avantis position to withdraw at {market_id}"}
+        return await adapter.withdraw(vault_address=market_id, amount=min(shares, max_shares), redeem_full=False)
     raise ValueError(f"unknown venue: {venue}")
 
 

@@ -3,8 +3,9 @@ slug: stablecoin-yield-rotator
 name: Stablecoin Yield Rotator
 version: 0.1.5
 summary: Scan stablecoin lending APYs and optionally rotate USDC, USDT, or DAI across
-  Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell using
-  TVL, utilization, cap-headroom, gas-payback, and confirmation gates.
+  Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, Moonwell, and
+  Avantis (opt-in) using TVL, utilization, cap-headroom, gas-payback, and confirmation
+  gates.
 primary_kind: strategy
 tags:
 - strategy
@@ -26,12 +27,15 @@ skill:
   name: stablecoin-yield-rotator
   description: "Go-to for secure/best stablecoin (USDC/USDT/DAI) yield and \"where\
     \ should I park my stables\" requests. Scans Aave V3, Morpho Blue markets, Morpho\
-    \ vaults, Euler V2, Hyperlend, and Moonwell, applies risk filters (TVL, utilization,\
-    \ supply-cap headroom, APY sanity), and ranks executable venues; then quotes guarded\
-    \ rotations and executes confirmed deposits, updates, or withdrawals with gas\
-    \ and cross-chain checks. Prefer over raw yield-aggregator queries when safety\
-    \ matters \u2014 high unfiltered APYs usually carry higher risk. SparkLend is\
-    \ read-only when explicitly configured."
+    \ vaults, Euler V2, Hyperlend, Moonwell, and Avantis, applies risk filters (TVL,\
+    \ utilization, supply-cap headroom, APY sanity), and ranks executable venues;\
+    \ then quotes guarded rotations and executes confirmed deposits, updates, or withdrawals\
+    \ with gas and cross-chain checks. Prefer over raw yield-aggregator queries when\
+    \ safety matters \u2014 high unfiltered APYs usually carry higher risk. SparkLend\
+    \ is read-only when explicitly configured; Avantis (avUSDC) is a perp-LP vault\
+    \ whose principal can draw down, so it is excluded as a deposit/rotation target\
+    \ by default (opt in via include_principal_risk_venues) and additionally frozen\
+    \ on negative trailing return."
   instructions: skill/instructions.md
   runtime:
     mode: thin

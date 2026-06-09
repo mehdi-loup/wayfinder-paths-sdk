@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from venues import EXECUTABLE_VENUES, Position, VenueRow
+from venues import EXECUTABLE_VENUES, PRINCIPAL_RISK_VENUES, Position, VenueRow
 
 UTIL_SPIKE_CEILING = 0.95
 HEADROOM_FRACTION_FLOOR = 0.05
@@ -63,7 +63,7 @@ class RotationLeg:
     bridge_to_token: str | None = None
     # Source underlying token address — execution measures the wallet balance delta of
     # this token across the withdraw so the deposit/bridge uses what was actually
-    # redeemed (a venue may redeem less than the planned amount, e.g. an ERC-4626 maxRedeem cap).
+    # redeemed (a venue may redeem less than the planned amount; e.g. Avantis maxRedeem).
     from_asset_address: str | None = None
 
 
@@ -149,13 +149,17 @@ def leg_from_dict(d: dict[str, Any]) -> RotationLeg:
     )
 
 
-def _best_target_for_asset(rows: list[VenueRow], asset: str) -> list[VenueRow]:
+def _best_target_for_asset(
+    rows: list[VenueRow], asset: str, *, include_principal_risk: bool = False
+) -> list[VenueRow]:
     """Return rows for `asset` sorted by supply_apy descending. Only executable venues are eligible
-    targets — non-executable venues remain visible via scan/status but won't be planned for rotation."""
+    targets — non-executable venues remain visible via scan/status but won't be planned for rotation.
+    Principal-risk venues (e.g. Avantis) are excluded as targets unless `include_principal_risk`."""
     matching = [
         r for r in rows
         if r.asset_symbol == asset and r.venue in EXECUTABLE_VENUES
         and not r.is_frozen and not r.is_paused
+        and (include_principal_risk or r.venue not in PRINCIPAL_RISK_VENUES)
     ]
     matching.sort(key=lambda r: r.supply_apy, reverse=True)
     return matching
@@ -217,6 +221,7 @@ def quote_rotation(
     asset_price_usd: float = 1.0,
     min_target_tvl_usd: float | None = None,
     max_target_apy: float | None = DEFAULT_MAX_STABLECOIN_APY,
+    include_principal_risk_venues: bool = False,
 ) -> RotationPlan:
     """Build a rotation plan that satisfies all configured constraints.
 
@@ -235,7 +240,10 @@ def quote_rotation(
     venue_cap_fraction = max_position_pct_per_venue / 100.0
 
     for asset, asset_positions in by_asset.items():
-        targets = [r for r in _best_target_for_asset(scan, asset) if r.market_id.lower() not in blocked]
+        targets = [
+            r for r in _best_target_for_asset(scan, asset, include_principal_risk=include_principal_risk_venues)
+            if r.market_id.lower() not in blocked
+        ]
         if not targets:
             continue
 

@@ -22,8 +22,15 @@ Pendle is a large stablecoin yield source (PT-sUSDe, PT-USDC, etc.), but it does
 maturity-aware) and a different ranking basis — effectively a hybrid fixed-term
 strategy. Out of scope for the floating-APY rotator unless we decide to evolve it.
 
-## Avantis (avUSDC) — held on a branch
+## Avantis (added) — follow-ups
 
-Avantis support (avUSDC perp-LP venue + principal-risk opt-in gate) is implemented
-but intentionally kept out of this release. It lives on the `feat/avantis-venue`
-branch pending a decision to ship principal-risk venues.
+avUSDC is wired in as an executable venue, but it's the junior tranche of a perp
+DEX LP (not a lending market).
+
+- [x] **Drawdown guard** — `_scan_avantis` freezes the row (`is_frozen=True`,
+  `AVANTIS_MIN_TRAILING_APY`) when the trailing junior return is negative (NAV
+  decline). Frozen rows stay visible in scans but are excluded as deposit /
+  rotation targets. Note: this guards *entry*; an existing position in a
+  drawing-down vault exits via normal rotation, not the freeze.
+- [ ] Surface `maxRedeem` headroom in scan so the rotator knows when an exit would
+  be **capped/locked** rather than discovering it at withdraw time.
