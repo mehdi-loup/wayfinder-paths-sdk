@@ -50,7 +50,8 @@
   .pad { padding: 4px 6px 8px; }
   .reason { color: var(--muted); font-size: 12px; }
   .empty { color: var(--muted); padding: 30px; text-align: center; }
-  .foot { color: var(--muted); font-size: 11px; margin-top: 22px; }
+  .foot { color: var(--muted); font-size: 11px; margin-top: 22px; line-height: 1.6; }
+  .foot a { color: var(--text); text-decoration: underline; }
   .err { color: var(--red); }
 </style>
 </head>
@@ -110,12 +111,12 @@
       return state.sortDir * (((av == null ? -1 : av)) - ((bv == null ? -1 : bv)));
     });
 
-    var statusClass = d.status === "ok" ? "ok" : "partial";
+    var snapDate = (d.generatedAt || "").slice(0, 10) || "unknown";
     var html = "";
     html += '<header>';
     html += '<div><h1>Stablecoin Yield Rotator</h1>';
     html += '<div class="sub">Ranked supply APY across lending venues · scan snapshot</div></div>';
-    html += '<span class="pill ' + statusClass + '">' + esc(d.status) + '</span>';
+    html += '<span class="pill">Snapshot of ' + esc(snapDate) + ' (install path for latest)</span>';
     html += '</header>';
 
     html += '<div class="stats">';
@@ -175,7 +176,7 @@
       html += '</tbody></table></div></details>';
     }
 
-    html += '<div class="foot">Snapshot generated ' + esc(d.generatedAt || "unknown") + ' · ' + d.row_count + ' markets discovered · static read-only data bundled with the path.</div>';
+    html += '<div class="foot">' + d.row_count + ' markets discovered · static read-only data bundled with the path.<br>For feature request or tracking, go to <a href="https://github.com/mehdi-loup/wayfinder-paths-sdk/issues" target="_blank" rel="noopener noreferrer">github.com/mehdi-loup/wayfinder-paths-sdk/issues</a></div>';
 
     app.innerHTML = html;
     app.setAttribute("data-path-ready", "true");
