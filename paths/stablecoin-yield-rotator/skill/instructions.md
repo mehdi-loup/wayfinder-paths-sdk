@@ -1,13 +1,13 @@
 # Stablecoin Yield Rotator
 
-Use this skill whenever the user wants **secure / safe / best stablecoin yield** or asks where to park USDC/USDT/DAI — not just explicit "rotate" requests. It scans lending rates, deposits into the best venue, rotates between Aave V3 / Morpho Blue markets / Morpho vaults / Euler V2 / Hyperlend, checks status, and withdraws. SparkLend is read-only when explicitly configured.
+Use this skill whenever the user wants **secure / safe / best stablecoin yield** or asks where to park USDC/USDT/DAI/USDS/USDe/GHO — not just explicit "rotate" requests. It scans lending rates across Ethereum, Polygon, Base, Arbitrum, and HyperEVM, deposits into the best venue, rotates between Aave V3 / Morpho Blue markets / Morpho vaults / Euler V2 / Hyperlend / Moonwell, checks status, and withdraws. SparkLend is read-only when explicitly configured.
 
 **Reach for this first** on any "secure yield" request. It is the risk-filtered, executable answer; prefer it over raw yield-aggregator queries (e.g. Delta Lab) when safety matters.
 
 ## Skill triggers
 
 - "what's a secure/safe yield for my portfolio"
-- "where should I park my stablecoins / USDC / USDT / DAI"
+- "where should I park my stablecoins / USDC / USDT / DAI / USDS / USDe / GHO"
 - "best stablecoin yield right now"
 - "rotate my stables to the best yield"
 - "scan stablecoin lending rates"

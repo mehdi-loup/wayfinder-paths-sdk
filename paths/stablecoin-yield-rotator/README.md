@@ -1,6 +1,6 @@
 # Stablecoin Yield Rotator
 
-Rotate stablecoin (USDC/USDT/DAI) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, and Hyperlend to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
+Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell — on Ethereum, Polygon, Base, Arbitrum, and HyperEVM — to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
 
 ## Actions
 
@@ -10,7 +10,7 @@ Rotate stablecoin (USDC/USDT/DAI) deposits across Aave V3, Morpho Blue markets, 
 |---|---|---|
 | `scan` | — | Read-only. Ranked APY table for all (asset, venue, chain) tuples. |
 | `quote-rotation` | — | Read-only. Proposed deltas vs current positions; expected uplift, gas, payback days. |
-| `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI>` | Initial deposit into the top-ranked venue for that asset. |
+| `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI\|USDS\|USDE\|GHO>` | Initial deposit into the top-ranked venue for that asset. |
 | `update` | `--confirm` | Re-quote + gas-check + execute. Without `--confirm`, emits the plan only (no broadcast). With `--confirm`, executes leg-by-leg, depositing the actual post-bridge balance delta on cross-chain legs. Halts on first revert. |
 | `status` | — | Positions across all venues + USD totals + blended APY. |
 | `withdraw` | `--amount <float>?` | Full or partial liquidate to stablecoin in wallet. |
@@ -38,7 +38,7 @@ Rotate stablecoin (USDC/USDT/DAI) deposits across Aave V3, Morpho Blue markets, 
 ## Limitations (v0.1)
 
 - No borrow legs / leverage loops.
-- No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only.
+- No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only. USDe is supported as a plain lend asset; note it carries Ethena protocol risk on top of venue risk.
 - No auto-rotation on a runner schedule — `update` runs on demand.
 - SparkLend: read-only via this path. `SparkLendAdapter` exposes only borrow/repay (plus reads), no `lend`/`unlend`. Add `sparklend` back to `inputs/config.yaml` once the adapter exposes supply/withdraw — until then, rotations into/out of SparkLend are blocked at the dispatcher with `NotImplementedError`.
 - Hyperlend: HyperEVM-only.
