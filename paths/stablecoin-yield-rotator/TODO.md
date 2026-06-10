@@ -32,5 +32,8 @@ DEX LP (not a lending market).
   decline). Frozen rows stay visible in scans but are excluded as deposit /
   rotation targets. Note: this guards *entry*; an existing position in a
   drawing-down vault exits via normal rotation, not the freeze.
-- [ ] Surface `maxRedeem` headroom in scan so the rotator knows when an exit would
-  be **capped/locked** rather than discovering it at withdraw time.
+- [x] Surface `maxRedeem` headroom — `_avantis_positions` now reports `redeemable_raw`
+  (from the vault's `max_withdraw`, clamped to the held balance). `quote_rotation`
+  sizes the exit leg to what's redeemable now, and skips with an "exit currently
+  capped (0 redeemable now)" reason when the vault is fully locked — so caps are
+  surfaced at plan time instead of at withdraw time.

@@ -325,10 +325,29 @@ def quote_rotation(
                 plan.skipped.append(leg)
                 continue
 
+            raw_amount = pos.supply_raw
+
+            # Exit cap: some venues can't redeem the full held balance right now (e.g. an
+            # Avantis maxRedeem cap). Size the leg to what's redeemable now; skip if nothing
+            # is redeemable rather than plan an exit that under-delivers at execution.
+            if pos.redeemable_raw is not None:
+                if pos.redeemable_raw <= 0:
+                    plan.skipped.append(RotationLeg(
+                        asset_symbol=asset, from_venue=pos.venue, from_chain_id=pos.chain_id,
+                        from_market_id=pos.market_id, to_venue=chosen.venue, to_chain_id=chosen.chain_id,
+                        to_market_id=chosen.market_id, raw_amount=pos.supply_raw, decimals=pos.decimals,
+                        current_apy=current_apy, target_apy=chosen.supply_apy,
+                        apy_delta_bps=int(round((chosen.supply_apy - current_apy) * 10_000)),
+                        estimated_uplift_usd_30d=0.0, estimated_gas_usd=0.0, estimated_bridge_fee_usd=0.0,
+                        payback_days=0.0, is_cross_chain=chosen.chain_id != pos.chain_id, skipped=True,
+                        skip_reason=f"exit currently capped on {pos.venue}@{pos.chain_id} (0 redeemable now)",
+                    ))
+                    continue
+                raw_amount = min(raw_amount, pos.redeemable_raw)
+
             # Diversification cap: size the rotation so the target venue does not exceed
             # max_position_pct_per_venue of total `asset` portfolio. Exclude the source
             # position itself from the "currently in target" count — we're moving it.
-            raw_amount = pos.supply_raw
             current_into_target = sum(
                 p.supply_raw / (10 ** p.decimals)
                 for p in asset_positions

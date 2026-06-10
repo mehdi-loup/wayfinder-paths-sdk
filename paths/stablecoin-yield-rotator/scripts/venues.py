@@ -97,6 +97,10 @@ class Position:
     decimals: int
     supply_raw: int
     supply_usd: float | None
+    # Underlying assets currently redeemable right now (for venues whose exit can be
+    # capped/locked below the held balance, e.g. an Avantis maxRedeem cap). None means
+    # "no cap" (the full supply_raw is redeemable). The rotator sizes exit legs to this.
+    redeemable_raw: int | None = None
 
 
 def _matches_asset(symbol: str | None, allowed: set[str]) -> bool:
@@ -716,6 +720,10 @@ async def _avantis_positions(adapter: AvantisAdapter, chain_id: int, allowed: se
     if assets <= 0:
         return []
     decimals = int(pos.get("decimals") or 6)
+    # Surface how much is actually redeemable now: the vault can cap redemptions
+    # below the held balance (perp-LP buffer/lock). max_withdraw is in underlying
+    # assets; clamp to the held balance so it never overstates the position.
+    redeemable_raw = min(int(pos.get("max_withdraw") or 0), assets)
     return [Position(
         venue="avantis",
         chain_id=chain_id,
@@ -725,6 +733,7 @@ async def _avantis_positions(adapter: AvantisAdapter, chain_id: int, allowed: se
         decimals=decimals,
         supply_raw=assets,
         supply_usd=assets / (10**decimals),
+        redeemable_raw=redeemable_raw,
     )]
 
 

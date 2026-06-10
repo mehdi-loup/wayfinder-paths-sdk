@@ -613,6 +613,7 @@ async def test_avantis_positions_reports_underlying_assets():
         "shares_balance": 238_000_000,
         "underlying_token": USDC_ADDRESS,
         "decimals": 6,
+        "max_withdraw": 90_000_000,  # vault currently caps redemption below the balance
     }))
 
     positions = await _avantis_positions(adapter, chain_id=8453, allowed={"USDC"}, account=WALLET_ADDRESS)
@@ -621,6 +622,64 @@ async def test_avantis_positions_reports_underlying_assets():
     assert positions[0].market_id == AVANTIS_VAULT
     assert positions[0].supply_raw == 250_000_000
     assert positions[0].asset_symbol == "USDC"
+    # Redeemable headroom surfaced so the rotator knows the exit is capped.
+    assert positions[0].redeemable_raw == 90_000_000
+
+
+async def test_avantis_positions_redeemable_clamped_to_balance():
+    from venues import _avantis_positions  # noqa: PLC0415
+
+    adapter = AsyncMock()
+    adapter.vault = AVANTIS_VAULT
+    adapter.get_pos = AsyncMock(return_value=(True, {
+        "assets_balance": 100_000_000,
+        "underlying_token": USDC_ADDRESS,
+        "decimals": 6,
+        "max_withdraw": 999_000_000_000,  # uncapped vault reports more than held
+    }))
+
+    positions = await _avantis_positions(adapter, chain_id=8453, allowed={"USDC"}, account=WALLET_ADDRESS)
+    # Never overstate: redeemable is clamped to the held balance.
+    assert positions[0].redeemable_raw == 100_000_000
+
+
+async def test_rotation_caps_exit_leg_to_redeemable():
+    from rotation import quote_rotation  # noqa: PLC0415
+
+    scan = [
+        _make_row("avantis", AVANTIS_VAULT, 0.02),
+        _make_row("aave_v3", USDC_ADDRESS, 0.06),
+    ]
+    pos = Position(
+        venue="avantis", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
+        market_id=AVANTIS_VAULT, decimals=6, supply_raw=100_000 * 10**6,
+        supply_usd=100_000.0, redeemable_raw=40_000 * 10**6,
+    )
+
+    plan = quote_rotation(scan=scan, positions=[pos], min_apy_delta_bps=50, max_position_pct_per_venue=100)
+
+    assert plan.legs and plan.legs[0].from_venue == "avantis"
+    # Leg sized to what's redeemable now (40k), not the full 100k balance.
+    assert plan.legs[0].raw_amount == 40_000 * 10**6
+
+
+async def test_rotation_skips_when_nothing_redeemable():
+    from rotation import quote_rotation  # noqa: PLC0415
+
+    scan = [
+        _make_row("avantis", AVANTIS_VAULT, 0.02),
+        _make_row("aave_v3", USDC_ADDRESS, 0.06),
+    ]
+    pos = Position(
+        venue="avantis", chain_id=8453, asset_symbol="USDC", asset_address=USDC_ADDRESS,
+        market_id=AVANTIS_VAULT, decimals=6, supply_raw=100_000 * 10**6,
+        supply_usd=100_000.0, redeemable_raw=0,
+    )
+
+    plan = quote_rotation(scan=scan, positions=[pos], min_apy_delta_bps=50, max_position_pct_per_venue=100)
+
+    assert not plan.legs
+    assert plan.skipped and "redeemable" in plan.skipped[0].skip_reason
 
 
 async def test_avantis_lend_dispatcher_deposits_underlying():
