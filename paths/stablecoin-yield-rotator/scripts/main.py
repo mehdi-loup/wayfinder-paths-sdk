@@ -41,7 +41,9 @@ from rotation import (  # noqa: E402
     quote_rotation,
 )
 from venues import (  # noqa: E402
+    ALLOWED_STABLES,
     EXECUTABLE_VENUES,
+    STABLE_DECIMALS_18,
     Position,
     VenueRow,
     lend,
@@ -84,7 +86,7 @@ def emit(payload: dict[str, Any]) -> None:
 
 
 def _decimals_for(asset: str) -> int:
-    return 18 if asset.upper() == "DAI" else 6
+    return 18 if asset.upper() in STABLE_DECIMALS_18 else 6
 
 
 def _to_raw(asset: str, human: float) -> int:
@@ -202,6 +204,9 @@ def _scan_exclusion_reason(row: VenueRow, config: dict[str, Any]) -> str | None:
         return "paused"
     if row.asset_address.strip().lower() in {"", "none", "0x0000000000000000000000000000000000000000"}:
         return "missing underlying asset address"
+    # < 1 bp is yield dust that displays as 0.00% — not a meaningful target.
+    if row.supply_apy < 0.0001:
+        return "supply_apy ~ 0%"
     if max_apy is not None and row.supply_apy > max_apy:
         return f"supply_apy {row.supply_apy:.2%} > max_scan_apy {max_apy:.0%}"
     if row.utilization is not None and row.utilization > max_utilization:
@@ -326,8 +331,8 @@ async def action_quote_rotation(config: dict[str, Any]) -> dict[str, Any]:
 
 async def action_deposit(config: dict[str, Any], asset: str, human_amount: float) -> dict[str, Any]:
     asset = asset.upper()
-    if asset not in {"USDC", "USDT", "DAI"}:
-        raise ValueError(f"unsupported asset {asset}")
+    if asset not in ALLOWED_STABLES:
+        raise ValueError(f"unsupported asset {asset}; supported: {sorted(ALLOWED_STABLES)}")
     label = await _resolve_wallet_label(config)
     _, address = await get_wallet_signing_callback(label)
     min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
@@ -1102,7 +1107,7 @@ async def _main(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stablecoin Yield Rotator")
     parser.add_argument("--action", choices=ACTIONS, default="scan")
-    parser.add_argument("--asset", choices=["USDC", "USDT", "DAI"], help="Asset for deposit")
+    parser.add_argument("--asset", choices=sorted(ALLOWED_STABLES), help="Asset for deposit")
     parser.add_argument("--amount", type=float, help="Human amount (e.g., 100.0)")
     parser.add_argument(
         "--confirm",

@@ -138,6 +138,20 @@ async def test_scan_excludes_unsafe_rows_from_ranked_table(fake_signing_callback
     assert "tvl_usd" in excluded_by_market["0xLOWTVL"]
 
 
+async def test_scan_excludes_zero_apy_rows(fake_signing_callback):
+    zero = _make_row("morpho_blue_market", "0xZERO", 0.0)
+    dust = _make_row("morpho_vault", "0xDUST", 0.00005)
+    normal = _make_row("aave_v3", USDC_ADDRESS, 0.040)
+    with patch("main.scan_all", AsyncMock(return_value=[zero, dust, normal])):
+        result = await rotator.action_scan(CONFIG)
+
+    assert result["ranked_count"] == 1
+    assert result["ranked"][0]["market_id"] == USDC_ADDRESS
+    excluded_by_market = {row["market_id"]: row["exclude_reason"] for row in result["excluded"]}
+    assert excluded_by_market["0xZERO"] == "supply_apy ~ 0%"
+    assert excluded_by_market["0xDUST"] == "supply_apy ~ 0%"
+
+
 async def test_quote_rotation_excludes_apy_outlier_target(fake_signing_callback):
     scan = [
         _make_row("aave_v3", USDC_ADDRESS, 0.040),
@@ -943,3 +957,39 @@ async def test_gorlami_scenario_runs_base_usdc_deposit_withdraw(fake_signing_cal
     assert deposit_config["chains"] == [8453]
     assert deposit_config["venues"] == ["aave_v3"]
     withdraw.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Expanded token / chain universe (USDS, USDe, GHO; Polygon, Morpho on Arbitrum,
+# Euler on HyperEVM)
+# ---------------------------------------------------------------------------
+
+import venues  # noqa: E402
+
+
+def test_new_stables_allowed_with_18_decimals():
+    assert {"USDS", "USDE", "GHO"} <= venues.ALLOWED_STABLES
+    for asset in ("USDS", "USDE", "GHO", "DAI"):
+        assert rotator._decimals_for(asset) == 18
+    for asset in ("USDC", "USDT"):
+        assert rotator._decimals_for(asset) == 6
+
+
+def test_matches_asset_handles_mixed_case_and_excludes_wrappers():
+    assert venues._matches_asset("USDe", venues.ALLOWED_STABLES)
+    assert venues._matches_asset("usds", venues.ALLOWED_STABLES)
+    assert venues._matches_asset("GHO", venues.ALLOWED_STABLES)
+    assert not venues._matches_asset("sUSDe", venues.ALLOWED_STABLES)
+    assert not venues._matches_asset("sDAI", venues.ALLOWED_STABLES)
+
+
+def test_venue_chain_support_covers_expanded_networks():
+    assert 137 in venues.VENUE_CHAIN_SUPPORT["aave_v3"]
+    assert {137, 42161} <= venues.VENUE_CHAIN_SUPPORT["morpho_blue_market"]
+    assert {137, 42161} <= venues.VENUE_CHAIN_SUPPORT["morpho_vault"]
+    assert 999 in venues.VENUE_CHAIN_SUPPORT["euler_v2"]
+
+
+async def test_deposit_rejects_unsupported_asset():
+    with pytest.raises(ValueError, match="unsupported asset"):
+        await rotator.action_deposit(CONFIG, asset="FRAX", human_amount=10.0)

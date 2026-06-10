@@ -35,11 +35,11 @@ from wayfinder_paths.core.utils.web3 import web3_from_chain_id
 from wayfinder_paths.mcp.scripting import get_adapter
 
 VENUE_CHAIN_SUPPORT: dict[str, set[int]] = {
-    "aave_v3": {1, 8453, 42161},
-    "morpho_blue_market": {1, 8453},
-    "morpho_vault": {1, 8453},
+    "aave_v3": {1, 137, 8453, 42161},
+    "morpho_blue_market": {1, 137, 8453, 42161},
+    "morpho_vault": {1, 137, 8453, 42161},
     "sparklend": {1},
-    "euler_v2": {1, 8453, 42161},
+    "euler_v2": {1, 8453, 42161, 999},
     "hyperlend": {999},
     "moonwell": {8453},
 }
@@ -48,7 +48,11 @@ VENUE_CHAIN_SUPPORT: dict[str, set[int]] = {
 # read-only via the path because SparkLendAdapter has no supply/withdraw methods.
 EXECUTABLE_VENUES: set[str] = {"aave_v3", "morpho_blue_market", "morpho_vault", "euler_v2", "hyperlend", "moonwell"}
 
-ALLOWED_STABLES = {"USDC", "USDT", "DAI"}
+ALLOWED_STABLES = {"USDC", "USDT", "DAI", "USDS", "USDE", "GHO"}
+
+# Underlying decimals for venues that don't report them (Moonwell market reads
+# expose mToken decimals, not the underlying's). Everything else is 6.
+STABLE_DECIMALS_18 = {"DAI", "USDS", "USDE", "GHO"}
 
 # Moonwell mToken exchange-rate scaling (matches the adapter's own 1e18 convention).
 MANTISSA = 10**18
@@ -576,7 +580,7 @@ async def _scan_moonwell(adapter: MoonwellAdapter, chain_id: int, allowed: set[s
             continue
         symbol = _asset_symbol(underlying_symbol)
         # Underlying decimals (mTokenDecimals is 8 and not what callers need).
-        decimals = 18 if symbol == "DAI" else 6
+        decimals = 18 if symbol in STABLE_DECIMALS_18 else 6
         cash = int(m.get("cash") or 0)
         borrows = int(m.get("totalBorrows") or 0)
         reserves = int(m.get("totalReserves") or 0)
@@ -642,7 +646,7 @@ async def _moonwell_positions(adapter: MoonwellAdapter, chain_id: int, allowed: 
             asset_symbol=symbol,
             asset_address=str(m.get("underlying") or ""),
             market_id=mtoken,
-            decimals=18 if symbol == "DAI" else 6,
+            decimals=18 if symbol in STABLE_DECIMALS_18 else 6,
             supply_raw=supply_raw,
             supply_usd=None,
         ))
