@@ -53,6 +53,7 @@ from venues import (  # noqa: E402
 )
 
 from wayfinder_paths.adapters.brap_adapter.adapter import BRAPAdapter  # noqa: E402
+from wayfinder_paths.core.clients.NotifyClient import NOTIFY_CLIENT  # noqa: E402
 from wayfinder_paths.core.clients.TokenClient import TOKEN_CLIENT  # noqa: E402
 from wayfinder_paths.core.constants.chains import (  # noqa: E402
     CHAIN_ID_BASE,
@@ -68,6 +69,10 @@ from wayfinder_paths.core.utils.wallets import (  # noqa: E402
 )
 from wayfinder_paths.core.utils.web3 import web3_from_chain_id  # noqa: E402
 from wayfinder_paths.mcp.scripting import get_adapter  # noqa: E402
+from wayfinder_paths.runner.monitor_state import (  # noqa: E402
+    read_monitor_state,
+    write_monitor_state,
+)
 
 SCAN_CACHE_DIR = PATH_DIR / "inputs" / ".scan_cache"
 SCAN_CACHE_TTL_SECONDS = 900
@@ -906,6 +911,83 @@ async def action_update(config: dict[str, Any], *, confirmed: bool = False) -> d
 
 
 # ---------------------------------------------------------------------------
+# auto-rotate (unattended update for runner scheduling)
+# ---------------------------------------------------------------------------
+
+AUTO_ROTATE_STATE = "auto_rotate"
+
+
+def _leg_summary_line(leg: dict[str, Any]) -> str:
+    src = leg.get("from") or "wallet"
+    return (
+        f"- {leg['asset_symbol']} {leg['human_amount']:,.2f}: {src} → {leg['to']} "
+        f"(+{leg['apy_delta_bps']} bps, est. +${leg['estimated_uplift_usd_30d']:,.2f}/30d)"
+    )
+
+
+def _auto_rotate_notification(result: dict[str, Any]) -> tuple[str, str] | None:
+    """Map an update result to a (title, markdown_body) notification, or None for no-ops."""
+    status = result.get("status")
+    if status == "ok":
+        executed = result.get("executed") or []
+        lines = [_leg_summary_line(e["leg"]) for e in executed]
+        return (
+            f"Stable rotator: executed {len(executed)} rotation leg(s)",
+            "\n".join(lines),
+        )
+    if status == "halted":
+        executed = result.get("executed") or []
+        lines = [f"**Reason:** {result.get('reason')}"]
+        if executed:
+            lines.append(f"\nExecuted before halt ({len(executed)} leg(s)):")
+            lines.extend(_leg_summary_line(e["leg"]) for e in executed)
+        return ("Stable rotator: rotation halted", "\n".join(lines))
+    return None
+
+
+async def action_auto_rotate(config: dict[str, Any]) -> dict[str, Any]:
+    """Unattended rotation pass for the project runner. Executes the plan without
+    interactive confirmation — the rotation constraints in config.yaml are the only
+    gate — and emails a summary on executions and on new failures.
+
+    Repeated identical halts (e.g. the same insufficient-gas reason every hour) are
+    only notified once; the dedupe signature lives in durable runner monitor state.
+    """
+    result = await action_update(config, confirmed=True)
+    status = result.get("status")
+
+    state = read_monitor_state(AUTO_ROTATE_STATE, default={})
+    prev_signature = state.get("last_alert_signature")
+    signature = f"{status}:{result.get('reason') or ''}"
+
+    notification = _auto_rotate_notification(result)
+    notified = False
+    notify_error: str | None = None
+    # Executions are always news; halts only when the reason changed.
+    should_notify = notification is not None and (status == "ok" or signature != prev_signature)
+    if should_notify and notification is not None:
+        title, body = notification
+        try:
+            await NOTIFY_CLIENT.notify(title, body)
+            notified = True
+        except Exception as exc:  # noqa: BLE001
+            notify_error = str(exc)
+            logger.warning(f"auto-rotate notification failed: {exc}")
+
+    write_monitor_state(AUTO_ROTATE_STATE, {
+        "last_run_ts": int(time.time()),
+        "last_status": status,
+        "last_alert_signature": signature if notification is not None else prev_signature,
+        "last_executed_count": len(result.get("executed") or []),
+    })
+
+    payload = {**result, "action": "auto-rotate", "notified": notified}
+    if notify_error:
+        payload["notify_error"] = notify_error
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # withdraw
 # ---------------------------------------------------------------------------
 
@@ -1076,7 +1158,7 @@ async def action_gorlami_scenario(
 # CLI
 # ---------------------------------------------------------------------------
 
-ACTIONS = ("scan", "quote-rotation", "deposit", "update", "status", "withdraw", "gorlami-scenario")
+ACTIONS = ("scan", "quote-rotation", "deposit", "update", "auto-rotate", "status", "withdraw", "gorlami-scenario")
 
 
 async def _main(args: argparse.Namespace) -> dict[str, Any]:
@@ -1093,6 +1175,8 @@ async def _main(args: argparse.Namespace) -> dict[str, Any]:
         return await action_deposit(config, asset=args.asset, human_amount=args.amount)
     if args.action == "update":
         return await action_update(config, confirmed=args.confirm)
+    if args.action == "auto-rotate":
+        return await action_auto_rotate(config)
     if args.action == "withdraw":
         return await action_withdraw(config, human_amount=args.amount)
     if args.action == "gorlami-scenario":
