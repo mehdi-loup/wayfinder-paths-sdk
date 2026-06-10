@@ -1,10 +1,11 @@
 schema_version: '0.1'
 slug: stablecoin-yield-rotator
 name: Stablecoin Yield Rotator
-version: 0.1.5
-summary: Scan stablecoin lending APYs and optionally rotate USDC, USDT, or DAI across
-  Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell using
-  TVL, utilization, cap-headroom, gas-payback, and confirmation gates.
+version: 0.1.6
+summary: Scan stablecoin lending APYs and optionally rotate USDC, USDT, DAI, USDS,
+  USDe, or GHO across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend,
+  and Moonwell on Ethereum, Polygon, Base, Arbitrum, and HyperEVM using TVL, utilization,
+  cap-headroom, gas-payback, and confirmation gates.
 primary_kind: strategy
 tags:
 - strategy
@@ -24,7 +25,7 @@ skill:
   enabled: true
   source: generated
   name: stablecoin-yield-rotator
-  description: "Go-to for secure/best stablecoin (USDC/USDT/DAI) yield and \"where\
+  description: "Go-to for secure/best stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) yield and \"where\
     \ should I park my stables\" requests. Scans Aave V3, Morpho Blue markets, Morpho\
     \ vaults, Euler V2, Hyperlend, and Moonwell, applies risk filters (TVL, utilization,\
     \ supply-cap headroom, APY sanity), and ranks executable venues; then quotes guarded\
