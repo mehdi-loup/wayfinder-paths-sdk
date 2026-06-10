@@ -993,3 +993,104 @@ def test_venue_chain_support_covers_expanded_networks():
 async def test_deposit_rejects_unsupported_asset():
     with pytest.raises(ValueError, match="unsupported asset"):
         await rotator.action_deposit(CONFIG, asset="FRAX", human_amount=10.0)
+
+
+# ---------------------------------------------------------------------------
+# auto-rotate (unattended runner action)
+# ---------------------------------------------------------------------------
+
+def _ok_update_result():
+    return {
+        "action": "update",
+        "status": "ok",
+        "executed": [{
+            "leg": {
+                "asset_symbol": "USDC",
+                "from": "aave_v3@8453",
+                "to": "morpho_blue_market@8453",
+                "human_amount": 1000.0,
+                "apy_delta_bps": 120,
+                "estimated_uplift_usd_30d": 9.86,
+            },
+            "receipts": [{"status": 1}],
+        }],
+        "gas_check": {"insufficient": []},
+    }
+
+
+@pytest.fixture
+def monitor_state(tmp_path):
+    store: dict[str, dict] = {}
+
+    def read(name, default=None):
+        return store.get(name, dict(default or {}))
+
+    def write(name, payload):
+        store[name] = payload
+        return tmp_path / f"{name}.json"
+
+    with (
+        patch("main.read_monitor_state", side_effect=read),
+        patch("main.write_monitor_state", side_effect=write),
+    ):
+        yield store
+
+
+async def test_auto_rotate_notifies_on_execution(monitor_state):
+    notify = AsyncMock(return_value={"ok": True})
+    with (
+        patch("main.action_update", AsyncMock(return_value=_ok_update_result())),
+        patch.object(rotator.NOTIFY_CLIENT, "notify", notify),
+    ):
+        result = await rotator.action_auto_rotate(CONFIG)
+
+    assert result["action"] == "auto-rotate"
+    assert result["status"] == "ok"
+    assert result["notified"] is True
+    notify.assert_awaited_once()
+    title, body = notify.await_args.args
+    assert "1 rotation leg" in title
+    assert "USDC" in body and "aave_v3@8453" in body
+    assert monitor_state["auto_rotate"]["last_status"] == "ok"
+
+
+async def test_auto_rotate_dedupes_repeated_halts(monitor_state):
+    halted = {"action": "update", "status": "halted", "reason": "insufficient native gas", "executed": []}
+    notify = AsyncMock(return_value={"ok": True})
+    with (
+        patch("main.action_update", AsyncMock(return_value=halted)),
+        patch.object(rotator.NOTIFY_CLIENT, "notify", notify),
+    ):
+        first = await rotator.action_auto_rotate(CONFIG)
+        second = await rotator.action_auto_rotate(CONFIG)
+
+    assert first["notified"] is True
+    assert second["notified"] is False
+    notify.assert_awaited_once()
+
+
+async def test_auto_rotate_silent_on_noop(monitor_state):
+    noop = {"action": "update", "status": "no-op", "reason": "no legs passed constraints", "skipped": []}
+    notify = AsyncMock(return_value={"ok": True})
+    with (
+        patch("main.action_update", AsyncMock(return_value=noop)),
+        patch.object(rotator.NOTIFY_CLIENT, "notify", notify),
+    ):
+        result = await rotator.action_auto_rotate(CONFIG)
+
+    assert result["notified"] is False
+    notify.assert_not_awaited()
+    assert monitor_state["auto_rotate"]["last_status"] == "no-op"
+
+
+async def test_auto_rotate_survives_notify_failure(monitor_state):
+    notify = AsyncMock(side_effect=RuntimeError("notify backend down"))
+    with (
+        patch("main.action_update", AsyncMock(return_value=_ok_update_result())),
+        patch.object(rotator.NOTIFY_CLIENT, "notify", notify),
+    ):
+        result = await rotator.action_auto_rotate(CONFIG)
+
+    assert result["status"] == "ok"
+    assert result["notified"] is False
+    assert "notify backend down" in result["notify_error"]
