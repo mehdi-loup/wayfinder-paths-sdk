@@ -12,7 +12,7 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 | `quote-rotation` | — | Read-only. Proposed deltas vs current positions; expected uplift, gas, payback days. |
 | `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI\|USDS\|USDE\|GHO>` | Initial deposit into the top-ranked venue for that asset. |
 | `update` | `--confirm` | Re-quote + gas-check + execute. Without `--confirm`, emits the plan only (no broadcast). With `--confirm`, executes leg-by-leg, depositing the actual post-bridge balance delta on cross-chain legs. Halts on first revert. Idle wallet balances of configured stables (≥ 1 unit) are planned as 0%-APY deposit legs, so a fresh wallet bootstraps without a manual `deposit`. |
-| `auto-rotate` | — | Unattended `update --confirm` for runner scheduling. Emails a summary on executed rotations and on new failures (repeated identical halts alert once). No-ops are silent. Legs touching gas-starved chains are skipped (and reported) instead of halting the whole run. |
+| `auto-rotate` | — | Unattended `update --confirm` for runner scheduling. Emails a summary on executed rotations and on new failures (repeated identical halts alert once). No-ops are silent. |
 | `status` | — | Positions across all venues + USD totals + blended APY. |
 | `withdraw` | `--amount <float>?` | Full or partial liquidate to stablecoin in wallet. |
 | `gorlami-scenario` | `--amount <float>?` | Creates a Gorlami Base fork, seeds wallet ETH + USDC, then runs scan → deposit → status → withdraw → status against Aave V3. Defaults to 10 USDC. |
@@ -34,6 +34,7 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 - Skip target venues with utilization > 95% or supply cap headroom < 5% of position size.
 - Cross-chain bridges only when `uplift_usd × payback_days > bridge_fee_usd × 2`.
 - Gas balance check on every chain in the rotation path.
+- Gas-starved **destination** chains get a planned top-up leg: a small slice of the rotating stable is bridged into native gas first, and the top-up's full cost is added to the rotation's cost in the payback/max-gas gates — a rotation that can't amortize its own gas funding is skipped. Gas-starved **source** chains can't be fixed automatically (no gas to sign with) and are surfaced as skipped legs with a fund-gas reason.
 - Scan data is cached for 15 minutes; wallet positions are always refreshed before quote/update, and target venues are re-checked live before fund-moving execution.
 
 ## Scheduled auto-rotation
