@@ -62,7 +62,10 @@ from wayfinder_paths.core.constants.chains import (  # noqa: E402
 )
 from wayfinder_paths.core.constants.contracts import BASE_USDC  # noqa: E402
 from wayfinder_paths.core.utils.gorlami import gorlami_fork  # noqa: E402
-from wayfinder_paths.core.utils.tokens import get_token_balance  # noqa: E402
+from wayfinder_paths.core.utils.tokens import (  # noqa: E402
+    get_token_balance,
+    is_native_token,
+)
 from wayfinder_paths.core.utils.units import to_erc20_raw, to_wei_eth  # noqa: E402
 from wayfinder_paths.core.utils.wallets import (  # noqa: E402
     get_wallet_signing_callback,
@@ -552,7 +555,12 @@ async def _execute_bridge(
     adapter = await get_adapter(BRAPAdapter, wallet_label)
     try:
         from_token = await TOKEN_CLIENT.get_token_details(f"{src_code}_{from_token_address.lower()}")
-        to_token = await TOKEN_CLIENT.get_token_details(f"{dst_code}_{to_token_address.lower()}")
+        # Native destinations (gas top-ups) resolve via the gas-token endpoint — the
+        # `<chain>_<address>` detail query doesn't accept the native sentinel.
+        if is_native_token(to_token_address):
+            to_token = await TOKEN_CLIENT.get_gas_token(dst_code)
+        else:
+            to_token = await TOKEN_CLIENT.get_token_details(f"{dst_code}_{to_token_address.lower()}")
     except Exception as exc:  # noqa: BLE001
         return False, {"error": f"token lookup failed: {exc}"}
     if not from_token or not to_token:
@@ -688,6 +696,43 @@ async def _execute_leg(
         if not (leg.bridge_from_token and leg.bridge_to_token):
             raise RuntimeError("cross-chain leg missing bridge_from_token/bridge_to_token; re-run quote-rotation")
 
+        # 2a. Destination gas top-up: bridge the planned stable slice into native gas
+        #     before anything needs signing on the destination. The main bridge below
+        #     is sized down by the slice.
+        main_bridge_raw = leg.raw_amount
+        if leg.gas_topup:
+            topup = leg.gas_topup
+            native = topup.get("native_token") or {}
+            if not native.get("address"):
+                raise RuntimeError("gas top-up leg missing native token address; re-run quote-rotation")
+            stable_raw = int(topup["stable_raw"])
+            topup_ok, topup_payload = await _execute_bridge(
+                wallet_label=wallet_label,
+                from_chain_id=leg.from_chain_id,  # type: ignore[arg-type]
+                to_chain_id=leg.to_chain_id,
+                from_token_address=leg.bridge_from_token,
+                to_token_address=str(native["address"]),
+                raw_amount=stable_raw,
+                sender=sender_address,
+                slippage_bps=slippage_bps,
+                locked_quote=topup.get("quote"),
+            )
+            if not topup_ok:
+                raise RuntimeError(f"gas top-up failed: {topup_payload}")
+            min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
+            dest_gas = await _gas_balance_wei(leg.to_chain_id, sender_address)
+            if dest_gas < min_gas_wei:
+                raise RuntimeError(
+                    f"destination gas still below floor after top-up "
+                    f"({dest_gas} < {min_gas_wei} wei on chain {leg.to_chain_id}); halting before deposit"
+                )
+            receipts["gas_topup"] = {
+                **topup_payload,
+                "stable_raw_spent": stable_raw,
+                "destination_gas_wei_after": dest_gas,
+            }
+            main_bridge_raw = leg.raw_amount - stable_raw
+
         balance_before = await get_token_balance(
             token_address=leg.bridge_to_token, chain_id=leg.to_chain_id, wallet_address=sender_address,
         )
@@ -697,7 +742,7 @@ async def _execute_leg(
             to_chain_id=leg.to_chain_id,
             from_token_address=leg.bridge_from_token,
             to_token_address=leg.bridge_to_token,
-            raw_amount=leg.raw_amount,
+            raw_amount=main_bridge_raw,
             sender=sender_address,
             slippage_bps=slippage_bps,
             locked_quote=leg.bridge_quote,
@@ -752,6 +797,65 @@ async def _execute_leg(
 
 # Idle wallet balances below this (in human units, ≈USD for stables) are ignored.
 IDLE_DUST_HUMAN = 1.0
+
+# Gas top-up sizing: top up starved chains to TOPUP_TARGET_MULTIPLE × min_gas_wei,
+# overspend the stable slice by TOPUP_STABLE_BUFFER to absorb bridge fees/slippage,
+# never route less than TOPUP_MIN_STABLE_USD (bridges reject dust), and assume a
+# conservative flat cost when the native token can't be priced.
+TOPUP_TARGET_MULTIPLE = 4
+TOPUP_STABLE_BUFFER = 1.25
+TOPUP_MIN_STABLE_USD = 5.0
+TOPUP_FALLBACK_USD = 15.0
+
+
+async def _gas_topup_state(
+    chains: list[int], address: str, min_gas_wei: int
+) -> dict[str, Any]:
+    """Native gas balances per chain plus top-up estimates for starved chains.
+
+    Returns {"balances": {chain_id: wei | None}, "starved": set[int],
+    "topups": {chain_id: {needed_wei, target_wei, topup_usd_cost, native_token}}}.
+    A chain whose balance can't be read is treated as funded — the execution-time
+    gas guard catches it; failing to price a native token falls back to a flat
+    conservative cost so the rotation decision stays gas-aware.
+    """
+    async def _bal(chain_id: int) -> int | None:
+        try:
+            return await _gas_balance_wei(chain_id, address)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"gas balance read failed for chain {chain_id}: {exc}")
+            return None
+
+    balances = dict(zip(chains, await asyncio.gather(*[_bal(c) for c in chains]), strict=True))
+    starved = {cid for cid, bal in balances.items() if bal is not None and bal < min_gas_wei}
+
+    topups: dict[int, dict[str, Any]] = {}
+    target_wei = min_gas_wei * TOPUP_TARGET_MULTIPLE
+    for cid in starved:
+        needed_wei = target_wei - (balances[cid] or 0)
+        info: dict[str, Any] = {"chain_id": cid, "needed_wei": needed_wei, "target_wei": target_wei}
+        try:
+            gas_token = await TOKEN_CLIENT.get_gas_token(CHAIN_ID_TO_CODE[cid])
+            details = await TOKEN_CLIENT.get_token_details(gas_token["token_id"], market_data=True)
+            price = float(details.get("current_price") or 0.0)
+            if price <= 0:
+                raise ValueError(f"no price for {gas_token['token_id']}")
+            decimals = int(gas_token.get("decimals") or 18)
+            native_usd = (needed_wei / (10 ** decimals)) * price
+            info["native_token"] = {
+                "token_id": gas_token["token_id"],
+                "symbol": gas_token.get("symbol"),
+                "address": gas_token["address"],
+                "decimals": decimals,
+                "price_usd": price,
+            }
+            info["topup_usd_cost"] = max(native_usd * TOPUP_STABLE_BUFFER, TOPUP_MIN_STABLE_USD)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"gas top-up pricing failed for chain {cid}: {exc}")
+            info["native_token"] = None
+            info["topup_usd_cost"] = TOPUP_FALLBACK_USD
+        topups[cid] = info
+    return {"balances": balances, "starved": starved, "topups": topups}
 
 
 async def _idle_wallet_positions(
@@ -810,6 +914,14 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
         ),
     )
     positions = positions + await _idle_wallet_positions(scan, address)
+
+    min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
+    gas_state = await _gas_topup_state(
+        chains=[int(c) for c in (config.get("chains") or [])],
+        address=address,
+        min_gas_wei=min_gas_wei,
+    )
+
     plan = quote_rotation(
         scan=scan,
         positions=positions,
@@ -828,6 +940,10 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
             if constraints.get("max_scan_apy") is not None
             else DEFAULT_MAX_STABLECOIN_APY
         ),
+        gas_topup_usd_by_chain={
+            cid: info["topup_usd_cost"] for cid, info in gas_state["topups"].items()
+        },
+        gasless_source_chains=gas_state["starved"],
     )
 
     # Post-process: attach a real BRAP quote to every cross-chain leg so the user can
@@ -852,12 +968,48 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
             continue
         leg.bridge_from_token = from_token
         leg.bridge_to_token = dst.asset_address
+
+        # Destination gas top-up: quote a stable→native bridge for a slice of the leg
+        # and shrink the main bridge by that slice. The slice cost is already in the
+        # leg's payback math via gas_topup_usd.
+        main_bridge_raw = leg.raw_amount
+        if leg.gas_topup_usd > 0:
+            info = gas_state["topups"].get(leg.to_chain_id) or {}
+            native = info.get("native_token")
+            if not native:
+                leg.skipped = True
+                leg.skip_reason = f"cannot price native gas for top-up on chain {leg.to_chain_id}"
+                continue
+            stable_raw = int(round(info["topup_usd_cost"] * (10 ** leg.decimals)))
+            if stable_raw >= leg.raw_amount:
+                leg.skipped = True
+                leg.skip_reason = (
+                    f"position too small to fund the ~${info['topup_usd_cost']:.2f} "
+                    f"gas top-up on chain {leg.to_chain_id}"
+                )
+                continue
+            ok_topup, topup_quote = await _quote_bridge(
+                from_chain_id=leg.from_chain_id,  # type: ignore[arg-type]
+                to_chain_id=leg.to_chain_id,
+                from_token_address=from_token,
+                to_token_address=str(native["address"]),
+                raw_amount=stable_raw,
+                sender=address,
+                slippage_bps=slippage_bps,
+            )
+            if not ok_topup:
+                leg.skipped = True
+                leg.skip_reason = f"gas top-up quote failed: {topup_quote}"
+                continue
+            leg.gas_topup = {**info, "stable_raw": stable_raw, "quote": topup_quote}
+            main_bridge_raw = leg.raw_amount - stable_raw
+
         ok, quote_or_err = await _quote_bridge(
             from_chain_id=leg.from_chain_id,  # type: ignore[arg-type]
             to_chain_id=leg.to_chain_id,
             from_token_address=from_token,
             to_token_address=dst.asset_address,
-            raw_amount=leg.raw_amount,
+            raw_amount=main_bridge_raw,
             sender=address,
             slippage_bps=slippage_bps,
         )
@@ -933,7 +1085,21 @@ async def action_update(
     min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
 
     plan, _scan, _positions = await _build_typed_plan(config, address)
+    # Legs the planner refused for missing source gas — surfaced loudly so a fully
+    # gasless wallet halts (and notifies) instead of silently no-opping forever.
+    gas_skipped: list[RotationLeg] = [
+        leg for leg in plan.skipped
+        if "no native gas on source chain" in (leg.skip_reason or "")
+    ]
     if not plan.legs:
+        if gas_skipped:
+            return {
+                "action": "update",
+                "status": "halted",
+                "reason": "insufficient native gas blocked every planned leg",
+                "gas_skipped": [leg_to_dict(_l) for _l in gas_skipped],
+                "skipped": [leg_to_dict(s) for s in plan.skipped],
+            }
         return {
             "action": "update",
             "status": "no-op",
@@ -953,9 +1119,19 @@ async def action_update(
         }
 
     gas_check = await _check_gas_budget(plan.legs, address, min_gas_wei)
-    gas_skipped: list[RotationLeg] = []
     if gas_check["insufficient"]:
-        if not skip_gasless_legs:
+        gasless_chains = {int(e["chain_id"]) for e in gas_check["insufficient"]}
+
+        def _uncovered(leg: RotationLeg) -> list[int]:
+            """Chains the leg needs gas on with no top-up planned for them."""
+            chains = set()
+            if leg.from_chain_id is not None and leg.from_chain_id in gasless_chains:
+                chains.add(leg.from_chain_id)
+            if leg.to_chain_id in gasless_chains and not leg.gas_topup:
+                chains.add(leg.to_chain_id)
+            return sorted(chains)
+
+        if not skip_gasless_legs and any(_uncovered(leg) for leg in plan.legs):
             return {
                 "action": "update",
                 "status": "halted",
@@ -963,11 +1139,9 @@ async def action_update(
                 "gas_check": gas_check,
                 "plan": [leg_to_dict(_l) for _l in plan.legs],
             }
-        gasless_chains = {int(e["chain_id"]) for e in gas_check["insufficient"]}
         executable: list[RotationLeg] = []
         for leg in plan.legs:
-            leg_chains = {leg.to_chain_id} | ({leg.from_chain_id} if leg.from_chain_id is not None else set())
-            starved = sorted(leg_chains & gasless_chains)
+            starved = _uncovered(leg)
             if starved:
                 leg.skipped = True
                 leg.skip_reason = f"insufficient native gas on chain(s) {starved}"
@@ -975,14 +1149,18 @@ async def action_update(
             else:
                 executable.append(leg)
         plan.legs = executable
-        if not plan.legs:
-            return {
-                "action": "update",
-                "status": "halted",
-                "reason": f"insufficient native gas on every planned chain: {sorted(gasless_chains)}",
-                "gas_check": gas_check,
-                "gas_skipped": [leg_to_dict(_l) for _l in gas_skipped],
-            }
+
+    if not plan.legs:
+        return {
+            "action": "update",
+            "status": "halted" if gas_skipped else "no-op",
+            "reason": (
+                "insufficient native gas blocked every planned leg"
+                if gas_skipped else "no executable legs"
+            ),
+            "gas_check": gas_check,
+            "gas_skipped": [leg_to_dict(_l) for _l in gas_skipped],
+        }
 
     executed: list[dict[str, Any]] = []
     for leg in plan.legs:
@@ -1005,7 +1183,7 @@ async def action_update(
                 "reason": f"halted on revert in leg {len(executed)}: {exc}",
             }
 
-    result = {"action": "update", "status": "ok", "executed": executed, "gas_check": gas_check}
+    result: dict[str, Any] = {"action": "update", "status": "ok", "executed": executed, "gas_check": gas_check}
     if gas_skipped:
         result["gas_skipped"] = [leg_to_dict(_l) for _l in gas_skipped]
     return result
@@ -1020,9 +1198,11 @@ AUTO_ROTATE_STATE = "auto_rotate"
 
 def _leg_summary_line(leg: dict[str, Any]) -> str:
     src = leg.get("from") or "wallet"
+    topup_usd = float(leg.get("gas_topup_usd") or 0.0)
+    topup_note = f", incl. ~${topup_usd:,.2f} gas top-up" if topup_usd > 0 else ""
     return (
         f"- {leg['asset_symbol']} {leg['human_amount']:,.2f}: {src} → {leg['to']} "
-        f"(+{leg['apy_delta_bps']} bps, est. +${leg['estimated_uplift_usd_30d']:,.2f}/30d)"
+        f"(+{leg['apy_delta_bps']} bps, est. +${leg['estimated_uplift_usd_30d']:,.2f}/30d{topup_note})"
     )
 
 
@@ -1030,8 +1210,11 @@ def _gas_skip_lines(result: dict[str, Any]) -> list[str]:
     gas_skipped = result.get("gas_skipped") or []
     if not gas_skipped:
         return []
-    lines = [f"\n**Skipped for missing gas** ({len(gas_skipped)} leg(s)) — fund native gas to enable:"]
-    lines.extend(f"- {leg['asset_symbol']} {leg['human_amount']:,.2f} → {leg['to']}: {leg['skip_reason']}" for leg in gas_skipped)
+    lines = [f"\n**Blocked for missing gas** ({len(gas_skipped)} leg(s)) — fund native gas to enable:"]
+    for leg in gas_skipped:
+        # Plan-time source-gas skips have no target venue; show the source instead.
+        where = leg["to"] if leg.get("to") and leg["to"] != "@0" else (leg.get("from") or "wallet")
+        lines.append(f"- {leg['asset_symbol']} {leg['human_amount']:,.2f} @ {where}: {leg['skip_reason']}")
     return lines
 
 
