@@ -11,8 +11,8 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 | `scan` | — | Read-only. Ranked APY table for all (asset, venue, chain) tuples. |
 | `quote-rotation` | — | Read-only. Proposed deltas vs current positions; expected uplift, gas, payback days. |
 | `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI\|USDS\|USDE\|GHO>` | Initial deposit into the top-ranked venue for that asset. |
-| `update` | `--confirm` | Re-quote + gas-check + execute. Without `--confirm`, emits the plan only (no broadcast). With `--confirm`, executes leg-by-leg, depositing the actual post-bridge balance delta on cross-chain legs. Halts on first revert. |
-| `auto-rotate` | — | Unattended `update --confirm` for runner scheduling. Emails a summary on executed rotations and on new failures (repeated identical halts alert once). No-ops are silent. |
+| `update` | `--confirm` | Re-quote + gas-check + execute. Without `--confirm`, emits the plan only (no broadcast). With `--confirm`, executes leg-by-leg, depositing the actual post-bridge balance delta on cross-chain legs. Halts on first revert. Idle wallet balances of configured stables (≥ 1 unit) are planned as 0%-APY deposit legs, so a fresh wallet bootstraps without a manual `deposit`. |
+| `auto-rotate` | — | Unattended `update --confirm` for runner scheduling. Emails a summary on executed rotations and on new failures (repeated identical halts alert once). No-ops are silent. Legs touching gas-starved chains are skipped (and reported) instead of halting the whole run. |
 | `status` | — | Positions across all venues + USD totals + blended APY. |
 | `withdraw` | `--amount <float>?` | Full or partial liquidate to stablecoin in wallet. |
 | `gorlami-scenario` | `--amount <float>?` | Creates a Gorlami Base fork, seeds wallet ETH + USDC, then runs scan → deposit → status → withdraw → status against Aave V3. Defaults to 10 USDC. |

@@ -21,6 +21,10 @@ UTIL_SPIKE_CEILING = 0.95
 HEADROOM_FRACTION_FLOOR = 0.05
 DEFAULT_MAX_STABLECOIN_APY = 0.50
 
+# Pseudo-venue for idle wallet balances. Positions with this venue earn 0% and
+# need no unlend step — the planner turns them into deposit legs.
+WALLET_VENUE = "wallet"
+
 
 class DiscoveryGapError(RuntimeError):
     """Raised when quote_rotation can't resolve a current position's APY from the scan."""
@@ -240,7 +244,11 @@ def quote_rotation(
             continue
 
         for pos in asset_positions:
-            if pos.venue not in EXECUTABLE_VENUES:
+            if pos.venue == WALLET_VENUE:
+                # Idle wallet balance: earns nothing, needs no unlend — any target
+                # beating min_apy_delta_bps produces a deposit leg.
+                current_apy = 0.0
+            elif pos.venue not in EXECUTABLE_VENUES:
                 # We can't unlend from a non-executable venue (no adapter write methods). Skip it
                 # with a clear reason instead of producing an unexecutable leg.
                 plan.skipped.append(RotationLeg(
@@ -254,18 +262,19 @@ def quote_rotation(
                     skip_reason=f"source venue {pos.venue!r} is not executable in this path",
                 ))
                 continue
-            current_apy_candidates = [
-                r.supply_apy for r in scan
-                if r.venue == pos.venue and r.chain_id == pos.chain_id and r.market_id == pos.market_id
-            ]
-            if not current_apy_candidates:
-                # The position's own market is missing from scan → discovery is incomplete.
-                # Refuse to plan rather than inflate apy_delta_bps using a 0.0 default.
-                raise DiscoveryGapError(
-                    f"current market {pos.venue}@{pos.chain_id}/{pos.market_id} missing from scan; "
-                    "rerun with strict scan or add the venue to the scan inputs"
-                )
-            current_apy = current_apy_candidates[0]
+            else:
+                current_apy_candidates = [
+                    r.supply_apy for r in scan
+                    if r.venue == pos.venue and r.chain_id == pos.chain_id and r.market_id == pos.market_id
+                ]
+                if not current_apy_candidates:
+                    # The position's own market is missing from scan → discovery is incomplete.
+                    # Refuse to plan rather than inflate apy_delta_bps using a 0.0 default.
+                    raise DiscoveryGapError(
+                        f"current market {pos.venue}@{pos.chain_id}/{pos.market_id} missing from scan; "
+                        "rerun with strict scan or add the venue to the scan inputs"
+                    )
+                current_apy = current_apy_candidates[0]
 
             # Find the best target that beats current_apy by min_apy_delta_bps and
             # passes constraints. Walk down the ranked list so utilization-spike
