@@ -74,6 +74,19 @@ def isolated_scan_cache(tmp_path):
         yield
 
 
+@pytest.fixture(autouse=True)
+def funded_gas():
+    """Default every chain to well-funded so planning never hits the network;
+    gas-specific tests override with their own patches. Top-up pricing is stubbed
+    to fail so starved chains use the deterministic flat fallback cost."""
+    no_network = AsyncMock(side_effect=RuntimeError("no network in tests"))
+    with (
+        patch("main._gas_balance_wei", AsyncMock(return_value=10**18)),
+        patch.object(rotator.TOKEN_CLIENT, "get_gas_token", no_network),
+    ):
+        yield
+
+
 async def test_scan_returns_ranked_table(fake_signing_callback):
     rows = [
         _make_row("aave_v3", USDC_ADDRESS, 0.040),
@@ -1245,7 +1258,7 @@ async def test_update_halts_when_every_leg_is_gasless(fake_signing_callback):
         result = await rotator.action_update(CONFIG, confirmed=True, skip_gasless_legs=True)
 
     assert result["status"] == "halted"
-    assert "insufficient native gas on every planned chain" in result["reason"]
+    assert "insufficient native gas blocked every planned leg" in result["reason"]
     assert len(result["gas_skipped"]) == 1
 
 
@@ -1261,3 +1274,151 @@ async def test_update_default_still_halts_on_gasless_chain(fake_signing_callback
 
     assert result["status"] == "halted"
     assert "insufficient native gas" in result["reason"]
+
+
+# ---------------------------------------------------------------------------
+# gas top-up planning + execution
+# ---------------------------------------------------------------------------
+
+from rotation import quote_rotation  # noqa: E402
+
+
+def _remote_row(chain_id: int, apy: float) -> VenueRow:
+    return VenueRow(
+        venue="hyperlend", chain_id=chain_id, asset_symbol="USDC",
+        asset_address="0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        market_id="0xREMOTE", decimals=6,
+        supply_apy=apy, utilization=0.5, supply_cap_headroom_raw=None,
+        tvl_usd=None,
+    )
+
+
+def test_quote_rotation_counts_topup_cost_in_payback():
+    # 30k position, +100bps cross-chain: $24.66/30d uplift. Base cost 12+6=18 →
+    # payback ~21.9d (passes 30d gate). Adding a $15 destination top-up → 33 →
+    # payback ~40.1d (fails). The top-up cost must flip the decision.
+    scan = [
+        _make_row("aave_v3", USDC_ADDRESS, 0.030),
+        _remote_row(999, 0.040),
+    ]
+    positions = [_make_position("aave_v3", USDC_ADDRESS, 30_000 * 10**6)]
+
+    without_topup = quote_rotation(
+        scan=scan, positions=positions,
+        min_apy_delta_bps=50, gas_amortization_days=30,
+        max_gas_usd_per_rotation=50, max_position_pct_per_venue=100,
+    )
+    assert len(without_topup.legs) == 1
+    assert without_topup.legs[0].gas_topup_usd == 0.0
+
+    with_topup = quote_rotation(
+        scan=scan, positions=positions,
+        min_apy_delta_bps=50, gas_amortization_days=30,
+        max_gas_usd_per_rotation=50, max_position_pct_per_venue=100,
+        gas_topup_usd_by_chain={999: 15.0},
+    )
+    assert with_topup.legs == []
+    assert any("payback" in (leg.skip_reason or "") for leg in with_topup.skipped)
+
+    # A big enough position amortizes the top-up and keeps the leg, cost included.
+    big = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
+    big_plan = quote_rotation(
+        scan=scan, positions=big,
+        min_apy_delta_bps=50, gas_amortization_days=30,
+        max_gas_usd_per_rotation=50, max_position_pct_per_venue=100,
+        gas_topup_usd_by_chain={999: 15.0},
+    )
+    assert len(big_plan.legs) == 1
+    assert big_plan.legs[0].gas_topup_usd == 15.0
+    assert big_plan.legs[0].estimated_gas_usd == 12.0 + 15.0
+
+
+def test_quote_rotation_skips_gasless_source_chains():
+    scan = [
+        _make_row("aave_v3", USDC_ADDRESS, 0.030),
+        _make_row("morpho_blue_market", "0xMARKET", 0.060),
+    ]
+    positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
+    plan = quote_rotation(
+        scan=scan, positions=positions,
+        min_apy_delta_bps=50, gas_amortization_days=30,
+        max_gas_usd_per_rotation=25, max_position_pct_per_venue=100,
+        gasless_source_chains={8453},
+    )
+    assert plan.legs == []
+    assert len(plan.skipped) == 1
+    assert "no native gas on source chain 8453" in plan.skipped[0].skip_reason
+
+
+async def test_update_executes_topup_covered_legs(fake_signing_callback):
+    leg = _gas_leg(8453, "0xBASE")
+    leg.to_chain_id = 999
+    leg.is_cross_chain = True
+    leg.gas_topup_usd = 15.0
+    leg.gas_topup = {"chain_id": 999, "stable_raw": 15 * 10**6, "native_token": {"address": "0xEee"}, "quote": {}}
+    plan = rotator.RotationPlan(legs=[leg])
+    gas_check = {"insufficient": [{"chain_id": 999, "balance_wei": 0, "min_required_wei": 1}], "checked": []}
+    with (
+        patch("main._build_typed_plan", AsyncMock(return_value=(plan, [], []))),
+        patch("main._check_gas_budget", AsyncMock(return_value=gas_check)),
+        patch("main._execute_leg", AsyncMock(return_value={"deposit": "0xtx"})) as exec_leg,
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_update(CONFIG, confirmed=True, skip_gasless_legs=True)
+
+    assert result["status"] == "ok"
+    assert len(result["executed"]) == 1
+    assert "gas_skipped" not in result
+    exec_leg.assert_awaited_once()
+
+
+async def test_execute_leg_runs_topup_before_main_bridge():
+    raw = 1_000 * 10**6
+    stable_raw = 15 * 10**6
+    leg = rotator.RotationLeg(
+        asset_symbol="USDC", from_venue="aave_v3", from_chain_id=8453,
+        from_market_id=USDC_ADDRESS, to_venue="hyperlend", to_chain_id=999,
+        to_market_id="0xREMOTE", raw_amount=raw, decimals=6,
+        current_apy=0.03, target_apy=0.06, apy_delta_bps=300,
+        estimated_uplift_usd_30d=24.66, estimated_gas_usd=27.0,
+        estimated_bridge_fee_usd=6.0, payback_days=20.0, is_cross_chain=True,
+        from_asset_address=USDC_ADDRESS,
+        bridge_from_token=USDC_ADDRESS, bridge_to_token="0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        bridge_quote={"output_amount": str(raw - stable_raw)},
+        gas_topup_usd=15.0,
+        gas_topup={
+            "chain_id": 999, "needed_wei": 2 * 10**15, "stable_raw": stable_raw,
+            "native_token": {"address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", "decimals": 18},
+            "quote": {"output_amount": str(3 * 10**15)},
+        },
+    )
+    bridge_calls = []
+
+    async def fake_bridge(**kwargs):
+        bridge_calls.append(kwargs)
+        return True, {"bridge_result": "0xtx"}
+
+    # Balance reads: src before/after withdraw, then dest stable before/after main bridge.
+    balances = AsyncMock(side_effect=[0, raw, 0, raw - stable_raw])
+    with (
+        patch("main.unlend", AsyncMock(return_value=(True, {"hash": "0xW"}))),
+        patch("main.lend", AsyncMock(return_value=(True, {"hash": "0xD"}))) as lend_mock,
+        patch("main.get_token_balance", balances),
+        patch("main._execute_bridge", side_effect=fake_bridge),
+        patch("main._gas_balance_wei", AsyncMock(return_value=2_000_000_000_000_000)),
+        patch("main._recheck_target_before_deposit", AsyncMock(return_value={"ok": True})),
+    ):
+        receipts = await rotator._execute_leg(
+            leg, wallet_label="main", sender_address=WALLET_ADDRESS,
+            slippage_bps=30, config=CONFIG,
+        )
+
+    assert len(bridge_calls) == 2
+    topup_call, main_call = bridge_calls
+    assert topup_call["to_token_address"] == "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+    assert topup_call["raw_amount"] == stable_raw
+    assert main_call["to_token_address"] == "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    assert main_call["raw_amount"] == raw - stable_raw
+    assert receipts["gas_topup"]["stable_raw_spent"] == stable_raw
+    lend_mock.assert_awaited_once()
+    assert lend_mock.await_args.kwargs["raw_amount"] == raw - stable_raw
