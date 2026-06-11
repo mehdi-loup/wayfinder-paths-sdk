@@ -35,6 +35,7 @@ from rotation import (  # noqa: E402
     DEFAULT_MAX_STABLECOIN_APY,
     HEADROOM_FRACTION_FLOOR,
     UTIL_SPIKE_CEILING,
+    WALLET_VENUE,
     RotationLeg,
     RotationPlan,
     leg_to_dict,
@@ -626,35 +627,52 @@ async def _execute_leg(
         raise RuntimeError(f"target re-check failed before withdraw: {target_recheck['reason']}")
     receipts["target_recheck_before_withdraw"] = target_recheck
 
-    # A venue may redeem less than the planned amount (e.g. an ERC-4626 maxRedeem cap),
-    # so measure the source underlying balance across the withdraw and spend only what
-    # actually came back — never the planned amount.
     if not leg.from_asset_address:
         raise RuntimeError("rotation leg missing from_asset_address; re-run quote-rotation")
-    src_before = await get_token_balance(
-        token_address=leg.from_asset_address, chain_id=leg.from_chain_id, wallet_address=sender_address,
-    )
-    ok, withdraw_tx = await unlend(
-        venue=leg.from_venue,
-        wallet_label=wallet_label,
-        chain_id=leg.from_chain_id,
-        market_id=leg.from_market_id,
-        raw_amount=leg.raw_amount,
-        withdraw_full=False,
-    )
-    if not ok:
-        raise RuntimeError(f"withdraw reverted at {leg.from_venue}@{leg.from_chain_id}: {withdraw_tx}")
-    src_after = await get_token_balance(
-        token_address=leg.from_asset_address, chain_id=leg.from_chain_id, wallet_address=sender_address,
-    )
-    withdrawn = src_after - src_before
-    if withdrawn <= 0:
-        raise RuntimeError(
-            f"withdraw produced no source balance delta on {leg.from_chain_id} "
-            f"(before={src_before} after={src_after}); refusing to deposit"
+    if leg.from_venue == WALLET_VENUE:
+        # Idle wallet source: no unlend — spend the live balance, never more than planned.
+        available = await get_token_balance(
+            token_address=leg.from_asset_address, chain_id=leg.from_chain_id, wallet_address=sender_address,
         )
-    receipts["withdraw"] = withdraw_tx
-    receipts["source_withdrawn"] = {"planned": leg.raw_amount, "actual": withdrawn}
+        if available <= 0:
+            raise RuntimeError(
+                f"no idle {leg.asset_symbol} balance left on chain {leg.from_chain_id}; re-run quote-rotation"
+            )
+        if leg.is_cross_chain and available < leg.raw_amount:
+            # The locked bridge quote was sized for the planned amount.
+            raise RuntimeError(
+                f"idle balance {available} < planned {leg.raw_amount}; locked bridge quote stale — re-run quote-rotation"
+            )
+        withdrawn = min(available, leg.raw_amount)
+        receipts["idle_source"] = {"planned": leg.raw_amount, "available": available, "spending": withdrawn}
+    else:
+        # A venue may redeem less than the planned amount (e.g. an ERC-4626 maxRedeem cap),
+        # so measure the source underlying balance across the withdraw and spend only what
+        # actually came back — never the planned amount.
+        src_before = await get_token_balance(
+            token_address=leg.from_asset_address, chain_id=leg.from_chain_id, wallet_address=sender_address,
+        )
+        ok, withdraw_tx = await unlend(
+            venue=leg.from_venue,
+            wallet_label=wallet_label,
+            chain_id=leg.from_chain_id,
+            market_id=leg.from_market_id,
+            raw_amount=leg.raw_amount,
+            withdraw_full=False,
+        )
+        if not ok:
+            raise RuntimeError(f"withdraw reverted at {leg.from_venue}@{leg.from_chain_id}: {withdraw_tx}")
+        src_after = await get_token_balance(
+            token_address=leg.from_asset_address, chain_id=leg.from_chain_id, wallet_address=sender_address,
+        )
+        withdrawn = src_after - src_before
+        if withdrawn <= 0:
+            raise RuntimeError(
+                f"withdraw produced no source balance delta on {leg.from_chain_id} "
+                f"(before={src_before} after={src_after}); refusing to deposit"
+            )
+        receipts["withdraw"] = withdraw_tx
+        receipts["source_withdrawn"] = {"planned": leg.raw_amount, "actual": withdrawn}
 
     # 2. Bridge if cross-chain. The leg carries pre-resolved underlying addresses + a locked
     #    BRAP quote from plan time. Re-quote at execution, refuse if materially worse, and
@@ -732,6 +750,53 @@ async def _execute_leg(
     return receipts
 
 
+# Idle wallet balances below this (in human units, ≈USD for stables) are ignored.
+IDLE_DUST_HUMAN = 1.0
+
+
+async def _idle_wallet_positions(
+    scan: list[VenueRow], address: str
+) -> list[Position]:
+    """Idle configured-stable balances in the wallet, as pseudo-positions earning 0%.
+
+    Token addresses come from scan rows, so only (asset, chain) pairs with at least
+    one scanned venue are swept. Per-token read failures are logged and skipped —
+    a flaky RPC must not block planning for real positions.
+    """
+    zero_addresses = {"", "none", "0x0000000000000000000000000000000000000000"}
+    by_key: dict[tuple[str, int], VenueRow] = {}
+    for row in scan:
+        key = (row.asset_symbol, row.chain_id)
+        if key not in by_key and row.asset_address.strip().lower() not in zero_addresses:
+            by_key[key] = row
+
+    async def _position(asset: str, chain_id: int, row: VenueRow) -> Position | None:
+        try:
+            balance = await get_token_balance(
+                token_address=row.asset_address, chain_id=chain_id, wallet_address=address,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"idle balance read failed for {asset}@{chain_id}: {exc}")
+            return None
+        if balance / (10 ** row.decimals) < IDLE_DUST_HUMAN:
+            return None
+        return Position(
+            venue=WALLET_VENUE,
+            chain_id=chain_id,
+            asset_symbol=asset,
+            asset_address=row.asset_address,
+            market_id=WALLET_VENUE,
+            decimals=row.decimals,
+            supply_raw=balance,
+            supply_usd=balance / (10 ** row.decimals),
+        )
+
+    found = await asyncio.gather(
+        *[_position(asset, chain_id, row) for (asset, chain_id), row in by_key.items()]
+    )
+    return [p for p in found if p is not None]
+
+
 async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[RotationPlan, list[VenueRow], list[Position]]:
     constraints = config.get("constraints") or {}
     slippage_bps = int(config.get("slippage_bps", 30))
@@ -744,6 +809,7 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
             account=address,
         ),
     )
+    positions = positions + await _idle_wallet_positions(scan, address)
     plan = quote_rotation(
         scan=scan,
         positions=positions,
@@ -770,22 +836,26 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
     for leg in plan.legs:
         if not leg.is_cross_chain:
             continue
-        src = next((r for r in scan
-                    if r.venue == leg.from_venue and r.chain_id == leg.from_chain_id
-                    and r.market_id == leg.from_market_id), None)
+        # Wallet-source legs carry their own token address; venue legs resolve via scan.
+        from_token = leg.from_asset_address if leg.from_venue == WALLET_VENUE else None
+        if from_token is None:
+            src = next((r for r in scan
+                        if r.venue == leg.from_venue and r.chain_id == leg.from_chain_id
+                        and r.market_id == leg.from_market_id), None)
+            from_token = src.asset_address if src is not None else None
         dst = next((r for r in scan
                     if r.venue == leg.to_venue and r.chain_id == leg.to_chain_id
                     and r.market_id == leg.to_market_id), None)
-        if src is None or dst is None:
+        if from_token is None or dst is None:
             leg.skipped = True
             leg.skip_reason = "could not resolve underlying token addresses for bridge quote"
             continue
-        leg.bridge_from_token = src.asset_address
+        leg.bridge_from_token = from_token
         leg.bridge_to_token = dst.asset_address
         ok, quote_or_err = await _quote_bridge(
             from_chain_id=leg.from_chain_id,  # type: ignore[arg-type]
             to_chain_id=leg.to_chain_id,
-            from_token_address=src.asset_address,
+            from_token_address=from_token,
             to_token_address=dst.asset_address,
             raw_amount=leg.raw_amount,
             sender=address,
@@ -841,12 +911,18 @@ async def _check_gas_budget(plan_legs: list[RotationLeg], address: str, min_gas_
     return await _check_gas_for_chains(chains, address, min_gas_wei)
 
 
-async def action_update(config: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
+async def action_update(
+    config: dict[str, Any], *, confirmed: bool = False, skip_gasless_legs: bool = False
+) -> dict[str, Any]:
     """Re-quote the rotation, gas-check, and execute every non-skipped leg sequentially.
 
     Two safety gates before any fund movement:
     - explicit `--confirm` flag (otherwise emit the plan with status=requires_confirmation)
     - native gas balance > min on every chain in the rotation path
+
+    `skip_gasless_legs=False` (interactive default) halts the whole update when any
+    chain lacks gas. `skip_gasless_legs=True` (auto-rotate) drops only the legs that
+    touch gas-starved chains and executes the rest, reporting what was skipped.
 
     The scan used for planning may come from the wallet-agnostic scan cache, but wallet
     positions are always fetched live and executable plans are never cached.
@@ -877,14 +953,36 @@ async def action_update(config: dict[str, Any], *, confirmed: bool = False) -> d
         }
 
     gas_check = await _check_gas_budget(plan.legs, address, min_gas_wei)
+    gas_skipped: list[RotationLeg] = []
     if gas_check["insufficient"]:
-        return {
-            "action": "update",
-            "status": "halted",
-            "reason": "insufficient native gas on one or more chains in the rotation path",
-            "gas_check": gas_check,
-            "plan": [leg_to_dict(_l) for _l in plan.legs],
-        }
+        if not skip_gasless_legs:
+            return {
+                "action": "update",
+                "status": "halted",
+                "reason": "insufficient native gas on one or more chains in the rotation path",
+                "gas_check": gas_check,
+                "plan": [leg_to_dict(_l) for _l in plan.legs],
+            }
+        gasless_chains = {int(e["chain_id"]) for e in gas_check["insufficient"]}
+        executable: list[RotationLeg] = []
+        for leg in plan.legs:
+            leg_chains = {leg.to_chain_id} | ({leg.from_chain_id} if leg.from_chain_id is not None else set())
+            starved = sorted(leg_chains & gasless_chains)
+            if starved:
+                leg.skipped = True
+                leg.skip_reason = f"insufficient native gas on chain(s) {starved}"
+                gas_skipped.append(leg)
+            else:
+                executable.append(leg)
+        plan.legs = executable
+        if not plan.legs:
+            return {
+                "action": "update",
+                "status": "halted",
+                "reason": f"insufficient native gas on every planned chain: {sorted(gasless_chains)}",
+                "gas_check": gas_check,
+                "gas_skipped": [leg_to_dict(_l) for _l in gas_skipped],
+            }
 
     executed: list[dict[str, Any]] = []
     for leg in plan.legs:
@@ -907,7 +1005,10 @@ async def action_update(config: dict[str, Any], *, confirmed: bool = False) -> d
                 "reason": f"halted on revert in leg {len(executed)}: {exc}",
             }
 
-    return {"action": "update", "status": "ok", "executed": executed, "gas_check": gas_check}
+    result = {"action": "update", "status": "ok", "executed": executed, "gas_check": gas_check}
+    if gas_skipped:
+        result["gas_skipped"] = [leg_to_dict(_l) for _l in gas_skipped]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -925,12 +1026,22 @@ def _leg_summary_line(leg: dict[str, Any]) -> str:
     )
 
 
+def _gas_skip_lines(result: dict[str, Any]) -> list[str]:
+    gas_skipped = result.get("gas_skipped") or []
+    if not gas_skipped:
+        return []
+    lines = [f"\n**Skipped for missing gas** ({len(gas_skipped)} leg(s)) — fund native gas to enable:"]
+    lines.extend(f"- {leg['asset_symbol']} {leg['human_amount']:,.2f} → {leg['to']}: {leg['skip_reason']}" for leg in gas_skipped)
+    return lines
+
+
 def _auto_rotate_notification(result: dict[str, Any]) -> tuple[str, str] | None:
     """Map an update result to a (title, markdown_body) notification, or None for no-ops."""
     status = result.get("status")
     if status == "ok":
         executed = result.get("executed") or []
         lines = [_leg_summary_line(e["leg"]) for e in executed]
+        lines.extend(_gas_skip_lines(result))
         return (
             f"Stable rotator: executed {len(executed)} rotation leg(s)",
             "\n".join(lines),
@@ -941,6 +1052,7 @@ def _auto_rotate_notification(result: dict[str, Any]) -> tuple[str, str] | None:
         if executed:
             lines.append(f"\nExecuted before halt ({len(executed)} leg(s)):")
             lines.extend(_leg_summary_line(e["leg"]) for e in executed)
+        lines.extend(_gas_skip_lines(result))
         return ("Stable rotator: rotation halted", "\n".join(lines))
     return None
 
@@ -953,7 +1065,7 @@ async def action_auto_rotate(config: dict[str, Any]) -> dict[str, Any]:
     Repeated identical halts (e.g. the same insufficient-gas reason every hour) are
     only notified once; the dedupe signature lives in durable runner monitor state.
     """
-    result = await action_update(config, confirmed=True)
+    result = await action_update(config, confirmed=True, skip_gasless_legs=True)
     status = result.get("status")
 
     state = read_monitor_state(AUTO_ROTATE_STATE, default={})

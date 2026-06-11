@@ -559,8 +559,9 @@ async def test_update_with_confirm_runs_gas_check_then_executes(fake_signing_cal
     positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
     fake_unlend = AsyncMock(return_value=(True, {"hash": "0xWITHDRAW"}))
     fake_lend = AsyncMock(return_value=(True, {"hash": "0xDEPOSIT"}))
-    # Source balance before/after the withdraw — the delta is what actually came back.
-    fake_balance = AsyncMock(side_effect=[0, 100_000 * 10**6])
+    # First read: idle wallet sweep (nothing idle). Then source balance before/after
+    # the withdraw — the delta is what actually came back.
+    fake_balance = AsyncMock(side_effect=[0, 0, 100_000 * 10**6])
 
     with (
         patch("main.scan_all", AsyncMock(return_value=scan)),
@@ -1094,3 +1095,169 @@ async def test_auto_rotate_survives_notify_failure(monitor_state):
     assert result["status"] == "ok"
     assert result["notified"] is False
     assert "notify backend down" in result["notify_error"]
+
+
+# ---------------------------------------------------------------------------
+# idle wallet balances → deposit legs
+# ---------------------------------------------------------------------------
+
+async def test_idle_wallet_balance_produces_deposit_leg(fake_signing_callback):
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.040)]
+    # Large enough that 400 bps of uplift pays back gas within gas_amortization_days.
+    balances = {(USDC_ADDRESS.lower(), 8453): 100_000 * 10**6}
+
+    async def fake_balance(token_address, chain_id, wallet_address, **kwargs):
+        return balances.get((str(token_address).lower(), chain_id), 0)
+
+    with (
+        patch("main.scan_all", AsyncMock(return_value=scan)),
+        patch("main.positions_all", AsyncMock(return_value=[])),
+        patch("main.get_token_balance", side_effect=fake_balance),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_quote_rotation(CONFIG)
+
+    legs = result["plan"]["legs"]
+    assert len(legs) == 1
+    assert legs[0]["from"] == "wallet@8453"
+    assert legs[0]["to"] == "aave_v3@8453"
+    assert legs[0]["current_apy"] == 0.0
+    assert legs[0]["raw_amount"] == 100_000 * 10**6
+    assert legs[0]["from_asset_address"] == USDC_ADDRESS
+
+
+async def test_idle_dust_balance_is_ignored(fake_signing_callback):
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.040)]
+
+    async def fake_balance(token_address, chain_id, wallet_address, **kwargs):
+        return int(0.5 * 10**6)  # below IDLE_DUST_HUMAN
+
+    with (
+        patch("main.scan_all", AsyncMock(return_value=scan)),
+        patch("main.positions_all", AsyncMock(return_value=[])),
+        patch("main.get_token_balance", side_effect=fake_balance),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_quote_rotation(CONFIG)
+
+    assert result["plan"]["legs"] == []
+
+
+async def test_idle_balance_read_failure_does_not_block_planning(fake_signing_callback):
+    scan = [
+        _make_row("aave_v3", USDC_ADDRESS, 0.040),
+        _make_row("morpho_blue_market", "0xMARKET", 0.060),
+    ]
+    positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
+
+    async def broken_balance(*args, **kwargs):
+        raise RuntimeError("rpc down")
+
+    with (
+        patch("main.scan_all", AsyncMock(return_value=scan)),
+        patch("main.positions_all", AsyncMock(return_value=positions)),
+        patch("main.get_token_balance", side_effect=broken_balance),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_quote_rotation(CONFIG)
+
+    # The venue rotation still plans; the idle sweep is just absent.
+    assert len(result["plan"]["legs"]) == 1
+    assert result["plan"]["legs"][0]["from"] == "aave_v3@8453"
+
+
+async def test_execute_leg_wallet_source_spends_live_balance_without_unlend():
+    leg = rotator.RotationLeg(
+        asset_symbol="USDC", from_venue="wallet", from_chain_id=8453,
+        from_market_id="wallet", to_venue="aave_v3", to_chain_id=8453,
+        to_market_id=USDC_ADDRESS, raw_amount=1_000 * 10**6, decimals=6,
+        current_apy=0.0, target_apy=0.04, apy_delta_bps=400,
+        estimated_uplift_usd_30d=3.29, estimated_gas_usd=4.0,
+        estimated_bridge_fee_usd=0.0, payback_days=36.5, is_cross_chain=False,
+        from_asset_address=USDC_ADDRESS,
+    )
+    lend_mock = AsyncMock(return_value=(True, {"tx": "0xdeadbeef"}))
+    unlend_mock = AsyncMock()
+    # Live balance below plan: spend what's actually there.
+    balance_mock = AsyncMock(return_value=800 * 10**6)
+    recheck = AsyncMock(return_value={"ok": True})
+    with (
+        patch("main.lend", lend_mock),
+        patch("main.unlend", unlend_mock),
+        patch("main.get_token_balance", balance_mock),
+        patch("main._recheck_target_before_deposit", recheck),
+    ):
+        receipts = await rotator._execute_leg(
+            leg, wallet_label="main", sender_address=WALLET_ADDRESS,
+            slippage_bps=30, config=CONFIG,
+        )
+
+    unlend_mock.assert_not_awaited()
+    lend_mock.assert_awaited_once()
+    assert lend_mock.await_args.kwargs["raw_amount"] == 800 * 10**6
+    assert receipts["idle_source"] == {
+        "planned": 1_000 * 10**6, "available": 800 * 10**6, "spending": 800 * 10**6,
+    }
+
+
+# ---------------------------------------------------------------------------
+# out-of-gas handling
+# ---------------------------------------------------------------------------
+
+def _gas_leg(chain_id: int, market: str) -> rotator.RotationLeg:
+    return rotator.RotationLeg(
+        asset_symbol="USDC", from_venue="aave_v3", from_chain_id=chain_id,
+        from_market_id=market, to_venue="morpho_blue_market", to_chain_id=chain_id,
+        to_market_id="0xTARGET", raw_amount=100 * 10**6, decimals=6,
+        current_apy=0.03, target_apy=0.05, apy_delta_bps=200,
+        estimated_uplift_usd_30d=1.64, estimated_gas_usd=4.0,
+        estimated_bridge_fee_usd=0.0, payback_days=73.0, is_cross_chain=False,
+        from_asset_address=USDC_ADDRESS,
+    )
+
+
+async def test_update_skips_gasless_legs_and_executes_the_rest(fake_signing_callback):
+    plan = rotator.RotationPlan(legs=[_gas_leg(8453, "0xBASE"), _gas_leg(1, "0xMAINNET")])
+    gas_check = {"insufficient": [{"chain_id": 1, "balance_wei": 0, "min_required_wei": 1}], "checked": []}
+    with (
+        patch("main._build_typed_plan", AsyncMock(return_value=(plan, [], []))),
+        patch("main._check_gas_budget", AsyncMock(return_value=gas_check)),
+        patch("main._execute_leg", AsyncMock(return_value={"deposit": "0xtx"})),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_update(CONFIG, confirmed=True, skip_gasless_legs=True)
+
+    assert result["status"] == "ok"
+    assert len(result["executed"]) == 1
+    assert result["executed"][0]["leg"]["from"] == "aave_v3@8453"
+    assert len(result["gas_skipped"]) == 1
+    assert "insufficient native gas" in result["gas_skipped"][0]["skip_reason"]
+
+
+async def test_update_halts_when_every_leg_is_gasless(fake_signing_callback):
+    plan = rotator.RotationPlan(legs=[_gas_leg(1, "0xMAINNET")])
+    gas_check = {"insufficient": [{"chain_id": 1, "balance_wei": 0, "min_required_wei": 1}], "checked": []}
+    with (
+        patch("main._build_typed_plan", AsyncMock(return_value=(plan, [], []))),
+        patch("main._check_gas_budget", AsyncMock(return_value=gas_check)),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_update(CONFIG, confirmed=True, skip_gasless_legs=True)
+
+    assert result["status"] == "halted"
+    assert "insufficient native gas on every planned chain" in result["reason"]
+    assert len(result["gas_skipped"]) == 1
+
+
+async def test_update_default_still_halts_on_gasless_chain(fake_signing_callback):
+    plan = rotator.RotationPlan(legs=[_gas_leg(8453, "0xBASE"), _gas_leg(1, "0xMAINNET")])
+    gas_check = {"insufficient": [{"chain_id": 1, "balance_wei": 0, "min_required_wei": 1}], "checked": []}
+    with (
+        patch("main._build_typed_plan", AsyncMock(return_value=(plan, [], []))),
+        patch("main._check_gas_budget", AsyncMock(return_value=gas_check)),
+        patch("main.get_wallet_signing_callback", fake_signing_callback),
+    ):
+        result = await rotator.action_update(CONFIG, confirmed=True)
+
+    assert result["status"] == "halted"
+    assert "insufficient native gas" in result["reason"]
