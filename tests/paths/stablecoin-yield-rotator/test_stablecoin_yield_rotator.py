@@ -1422,3 +1422,49 @@ async def test_execute_leg_runs_topup_before_main_bridge():
     assert receipts["gas_topup"]["stable_raw_spent"] == stable_raw
     lend_mock.assert_awaited_once()
     assert lend_mock.await_args.kwargs["raw_amount"] == raw - stable_raw
+
+
+# ---------------------------------------------------------------------------
+# wallet resolution: prefer the connected (remote/session) wallet
+# ---------------------------------------------------------------------------
+
+def _w(label, kind="local"):
+    return {"label": label, "address": "0x" + label.replace("-", "")[:1].ljust(40, "0"), "type": kind}
+
+
+async def test_resolve_prefers_connected_wallet_over_local_main():
+    # config pins "main" (the shipped/dev default) but a session wallet is connected.
+    wallets = [_w("main", "local"), _w("strat-1", "local"), _w("session-abc", "remote")]
+    with patch("main.load_wallets", AsyncMock(return_value=wallets)):
+        label = await rotator._resolve_wallet_label({"wallet": "main"})
+    assert label == "session-abc"
+
+
+async def test_resolve_blank_config_uses_sole_connected_wallet():
+    wallets = [_w("main", "local"), _w("strat-1", "local"), _w("session-abc", "remote")]
+    with patch("main.load_wallets", AsyncMock(return_value=wallets)):
+        label = await rotator._resolve_wallet_label({"wallet": None})
+    assert label == "session-abc"
+
+
+async def test_resolve_explicit_pin_to_a_connected_wallet_is_honored():
+    # Two connected wallets, config names one of them → honor the pin.
+    wallets = [_w("session-a", "remote"), _w("session-b", "remote"), _w("main", "local")]
+    with patch("main.load_wallets", AsyncMock(return_value=wallets)):
+        label = await rotator._resolve_wallet_label({"wallet": "session-b"})
+    assert label == "session-b"
+
+
+async def test_resolve_local_dev_falls_back_to_configured_when_no_remote():
+    # Pure local dev (no remote wallets): explicit "main" still works among many.
+    wallets = [_w("main", "local"), _w("strat-1", "local"), _w("strat-2", "local")]
+    with patch("main.load_wallets", AsyncMock(return_value=wallets)):
+        label = await rotator._resolve_wallet_label({"wallet": "main"})
+    assert label == "main"
+
+
+async def test_resolve_ambiguous_no_remote_blank_config_raises():
+    wallets = [_w("main", "local"), _w("strat-1", "local")]
+    with patch("main.load_wallets", AsyncMock(return_value=wallets)):
+        with pytest.raises(SystemExit):
+            await rotator._resolve_wallet_label({"wallet": None})
