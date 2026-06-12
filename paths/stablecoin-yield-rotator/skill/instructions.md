@@ -44,7 +44,7 @@ When the user asks for *secure* yield, this path's filtered, executable set **is
 
 ## Steps
 
-1. Inspect `inputs/config.yaml` to confirm chains, assets, venues, and constraints match user intent. The `wallet` field resolves to the configured label if present, else to the only connected wallet; if several wallets exist and none matches, the action fails listing the choices — set `wallet` accordingly.
+1. Inspect `inputs/config.yaml` to confirm chains, assets, venues, and constraints match user intent. Leave `wallet` blank to use the session-connected wallet — resolution prefers the connected (remote/session) wallet over local dev wallets, so a checked-out `config.json` with a `main` wallet won't shadow it. Precedence: an explicit `wallet` naming a connected wallet → the sole connected wallet → an explicit `wallet` naming any local wallet → the sole wallet overall → else the action fails listing the choices (set `wallet` to disambiguate).
 2. Run the requested action with `python scripts/wf_run.py -- --action <action> [args]`.
 3. For live fund-moving changes, run `gorlami-scenario` first when practical; it validates the path on a fork before any mainnet broadcast.
 4. For `update`, always run `quote-rotation` first and present the table to the user before broadcasting.
