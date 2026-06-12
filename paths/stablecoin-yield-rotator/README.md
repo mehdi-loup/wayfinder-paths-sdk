@@ -58,7 +58,7 @@ Claude safety review hook. Treat the schedule as live fund-moving automation and
 constraints accordingly. Outcome notifications are emailed via the Wayfinder notify
 service; dedupe state lives in `./.wayfinder/runner/job_state/`.
 
-## Limitations (v0.1)
+## Limitations (v0.2)
 
 - No borrow legs / leverage loops.
 - No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only. USDe is supported as a plain lend asset; note it carries Ethena protocol risk on top of venue risk.
