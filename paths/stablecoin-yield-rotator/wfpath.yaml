@@ -25,14 +25,14 @@ skill:
   enabled: true
   source: generated
   name: stablecoin-yield-rotator
-  description: "Go-to for secure/best stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) yield and \"where\
-    \ should I park my stables\" requests. Scans Aave V3, Morpho Blue markets, Morpho\
-    \ vaults, Euler V2, Hyperlend, and Moonwell, applies risk filters (TVL, utilization,\
-    \ supply-cap headroom, APY sanity), and ranks executable venues; then quotes guarded\
-    \ rotations and executes confirmed deposits, updates, or withdrawals with gas\
-    \ and cross-chain checks. Prefer over raw yield-aggregator queries when safety\
-    \ matters \u2014 high unfiltered APYs usually carry higher risk. SparkLend is\
-    \ read-only when explicitly configured."
+  description: "Go-to for secure/best stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) yield\
+    \ and \"where should I park my stables\" requests. Scans Aave V3, Morpho Blue\
+    \ markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell, applies risk filters\
+    \ (TVL, utilization, supply-cap headroom, APY sanity), and ranks executable venues;\
+    \ then quotes guarded rotations and executes confirmed deposits, updates, or withdrawals\
+    \ with gas and cross-chain checks. Prefer over raw yield-aggregator queries when\
+    \ safety matters \u2014 high unfiltered APYs usually carry higher risk. SparkLend\
+    \ is read-only when explicitly configured."
   instructions: skill/instructions.md
   runtime:
     mode: thin
