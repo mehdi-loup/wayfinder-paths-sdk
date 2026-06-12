@@ -103,11 +103,26 @@ def _to_raw(asset: str, human: float) -> int:
 
 
 async def _resolve_wallet_label(config: dict[str, Any]) -> str:
-    # Hosted execution supplies wallets with generated labels, so a bundled
-    # default like "main" won't match. Use the configured label when it exists,
-    # else fall back to the only available wallet, else fail with the choices.
+    # A hosted run links a session wallet (type="remote"); that's the wallet the user
+    # is actually operating, so prefer it over bundled local dev wallets like "main"
+    # that live in a checked-out config.json. Resolution order:
+    #   1. explicit `wallet` naming a connected (remote) wallet — honor the pin
+    #   2. the sole connected (remote) wallet — "the currently connected wallet"
+    #   3. explicit `wallet` naming any wallet — local-dev pin
+    #   4. the sole wallet overall
+    #   5. fail, listing the choices
     configured = str(config.get("wallet") or "").strip()
-    labels = [str(w.get("label") or "").strip() for w in await load_wallets() if w.get("label")]
+    wallets = await load_wallets()
+    labels = [str(w.get("label") or "").strip() for w in wallets if w.get("label")]
+    remote_labels = [
+        str(w.get("label") or "").strip()
+        for w in wallets
+        if w.get("type") == "remote" and w.get("label")
+    ]
+    if configured and configured in remote_labels:
+        return configured
+    if len(remote_labels) == 1:
+        return remote_labels[0]
     if configured and configured in labels:
         return configured
     if len(labels) == 1:
