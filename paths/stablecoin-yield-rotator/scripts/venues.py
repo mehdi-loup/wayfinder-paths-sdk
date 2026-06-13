@@ -29,6 +29,7 @@ from wayfinder_paths.adapters.moonwell_adapter import MoonwellAdapter
 from wayfinder_paths.adapters.morpho_adapter import MorphoAdapter
 from wayfinder_paths.adapters.sparklend_adapter.adapter import SparkLendAdapter
 from wayfinder_paths.core.constants.erc4626_abi import ERC4626_ABI
+from wayfinder_paths.core.utils.retry import retry_async
 from wayfinder_paths.core.utils.symbols import normalize_symbol
 from wayfinder_paths.core.utils.wallets import get_wallet_signing_callback
 from wayfinder_paths.core.utils.web3 import web3_from_chain_id
@@ -56,6 +57,43 @@ STABLE_DECIMALS_18 = {"DAI", "USDS", "USDE", "GHO"}
 
 # Moonwell mToken exchange-rate scaling (matches the adapter's own 1e18 convention).
 MANTISSA = 10**18
+
+# All reads go through the Wayfinder RPC proxy, which rate-limits per API key. The
+# full (venue, chain) + balance fan-out of a quote can trip 429s, so bound how many
+# reads are in flight at once and retry the rest with backoff.
+DEFAULT_RPC_CONCURRENCY = 4
+
+# Adapters fold transport errors into (ok, message) tuples and the read functions
+# re-raise them as RuntimeError(str), so the 429/5xx status only survives as text.
+_RATE_LIMIT_MARKERS = ("429", "too many requests", "rate limit")
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _RATE_LIMIT_MARKERS)
+
+
+async def run_bounded(semaphore: asyncio.Semaphore, factory: Any) -> Any:
+    """Run `factory()` under `semaphore`, retrying with backoff on rate-limit errors.
+
+    The semaphore is held only during each attempt (released across backoff sleeps)
+    so a throttled read naturally staggers behind the others instead of hammering.
+    """
+    async def _attempt() -> Any:
+        async with semaphore:
+            return await factory()
+
+    return await retry_async(
+        _attempt,
+        max_retries=4,
+        base_delay_s=0.5,
+        max_delay_s=8.0,
+        should_retry=is_rate_limit_error,
+    )
+
+
+def _bind(fn: Any, *args: Any) -> Any:
+    return lambda: fn(*args)
 
 
 @dataclass
@@ -735,6 +773,8 @@ async def scan_all(
     *,
     strict: bool = True,
     failure_log: list[dict[str, Any]] | None = None,
+    concurrency: int = DEFAULT_RPC_CONCURRENCY,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[VenueRow]:
     """Run scans for every (venue, chain) tuple in parallel, returning a flat list of rows.
 
@@ -742,11 +782,16 @@ async def scan_all(
     callers don't operate on partial data. Set `strict=False` for read-only UX where
     partial results are acceptable; pass `failure_log=[]` to capture errors so callers
     can surface them in the JSON response.
+
+    Reads are bounded by `semaphore` (or a fresh one of size `concurrency`) and retried
+    with backoff on 429s. Pass a shared `semaphore` to bound concurrency across several
+    fan-outs (scan + positions + balances) at once.
     """
     allowed = {a.upper() for a in assets} & ALLOWED_STABLES
     if not allowed:
         raise ValueError(f"no allowed stablecoins in {assets}; supported: {ALLOWED_STABLES}")
 
+    sem = semaphore or asyncio.Semaphore(max(1, concurrency))
     tasks: list[tuple[str, int, asyncio.Task[list[VenueRow]]]] = []
     for venue in venues:
         if venue not in _SCAN_FNS:
@@ -760,7 +805,9 @@ async def scan_all(
         for chain_id in chains:
             if not _venue_supports(venue, chain_id):
                 continue
-            tasks.append((venue, chain_id, asyncio.create_task(_SCAN_FNS[venue](adapter, chain_id, allowed))))
+            tasks.append((venue, chain_id, asyncio.create_task(
+                run_bounded(sem, _bind(_SCAN_FNS[venue], adapter, chain_id, allowed))
+            )))
 
     rows: list[VenueRow] = []
     failures: list[dict[str, Any]] = []
@@ -785,9 +832,13 @@ async def positions_all(
     *,
     strict: bool = True,
     failure_log: list[dict[str, Any]] | None = None,
+    concurrency: int = DEFAULT_RPC_CONCURRENCY,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[Position]:
-    """Aggregate user positions across (venue, chain). Strict by default. See scan_all for `failure_log`."""
+    """Aggregate user positions across (venue, chain). Strict by default. See scan_all for
+    `failure_log`, `concurrency`, and `semaphore`."""
     allowed = {a.upper() for a in assets} & ALLOWED_STABLES
+    sem = semaphore or asyncio.Semaphore(max(1, concurrency))
     tasks: list[tuple[str, int, asyncio.Task[list[Position]]]] = []
     for venue in venues:
         fn = _POSITION_FNS.get(venue)
@@ -801,7 +852,9 @@ async def positions_all(
         for chain_id in chains:
             if not _venue_supports(venue, chain_id):
                 continue
-            tasks.append((venue, chain_id, asyncio.create_task(fn(adapter, chain_id, allowed, account))))
+            tasks.append((venue, chain_id, asyncio.create_task(
+                run_bounded(sem, _bind(fn, adapter, chain_id, allowed, account))
+            )))
 
     out: list[Position] = []
     failures: list[dict[str, Any]] = []
