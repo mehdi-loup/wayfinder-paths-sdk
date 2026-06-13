@@ -31,6 +31,7 @@ _EXCLUDED_PATH_DIRS = {
     ".runtime",
     ".venv",
     ".wf-artifacts",
+    ".wf-cache",
     ".wf-state",
     ".wayfinder",
     "__pycache__",

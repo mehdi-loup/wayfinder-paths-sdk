@@ -164,7 +164,7 @@ def maybe_heartbeat_installed_paths(
             heartbeats=heartbeats,
             source=trigger,
         )
-    except PathsApiError as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("Installed-path heartbeat skipped after API error: {}", exc)
         return PathHeartbeatResult(
             status="error",

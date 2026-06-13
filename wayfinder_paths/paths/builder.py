@@ -26,7 +26,9 @@ _DEFAULT_IGNORE_DIRS = {
     ".git",
     ".venv",
     ".wf-artifacts",
+    ".wf-cache",
     ".wf-state",
+    ".scan_cache",
     "__pycache__",
     "node_modules",
     ".wayfinder",
@@ -37,13 +39,31 @@ _DEFAULT_SOURCE_IGNORE_DIRS = {
     ".git",
     ".venv",
     ".wf-artifacts",
+    ".wf-cache",
     ".wf-state",
+    ".scan_cache",
     "__pycache__",
     "node_modules",
     ".wayfinder",
 }
 
+_DEFAULT_IGNORE_FILE_NAMES = {
+    ".env",
+    ".DS_Store",
+}
+
+_DEFAULT_IGNORE_FILE_PREFIXES = (
+    ".env.",
+)
+
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+
+def _is_ignored_file(path: Path) -> bool:
+    name = path.name
+    return name in _DEFAULT_IGNORE_FILE_NAMES or any(
+        name.startswith(prefix) for prefix in _DEFAULT_IGNORE_FILE_PREFIXES
+    )
 
 
 def _iter_files(root: Path, *, ignore_dirs: set[str]) -> Iterable[Path]:
@@ -57,7 +77,9 @@ def _iter_files(root: Path, *, ignore_dirs: set[str]) -> Iterable[Path]:
             ]
         )
         for filename in sorted(filenames):
-            yield Path(dirpath) / filename
+            path = Path(dirpath) / filename
+            if not _is_ignored_file(path):
+                yield path
 
 
 def _sha256_file(path: Path) -> str:

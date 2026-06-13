@@ -404,6 +404,8 @@ def test_build_ignores_dot_build_artifacts(tmp_path: Path):
         with_applet=False,
     )
     render_skill_exports(path_dir=path_dir)
+    (path_dir / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    (path_dir / ".env.local").write_text("OTHER_SECRET=value\n", encoding="utf-8")
 
     built = PathBuilder.build(
         path_dir=path_dir, out_path=path_dir / "dist" / "bundle.zip"
@@ -412,6 +414,8 @@ def test_build_ignores_dot_build_artifacts(tmp_path: Path):
     with ZipFile(built.bundle_path, "r") as zf:
         names = zf.namelist()
     assert not any(name.startswith(".build/") for name in names)
+    assert ".env" not in names
+    assert ".env.local" not in names
 
 
 def test_install_path_hooks_is_idempotent(tmp_path: Path):
