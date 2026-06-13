@@ -41,15 +41,26 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 
 ## Scheduled auto-rotation
 
-Run rotations on a schedule with the project-local runner:
+Run rotations on a schedule with the project-local runner. Runner **script jobs only run
+`.py` files inside `.wayfinder_runs/`**, so add a tiny wrapper there that calls the
+`auto-rotate` action (this also avoids passing CLI args through the runner):
 
 ```bash
+mkdir -p .wayfinder_runs/library/stablecoin-yield-rotator
+cat > .wayfinder_runs/library/stablecoin-yield-rotator/auto_rotate.py <<'PY'
+import asyncio, sys
+from pathlib import Path
+SCRIPTS = Path(__file__).resolve().parents[3] / "paths" / "stablecoin-yield-rotator" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+import main as rotator
+rotator.emit(asyncio.run(rotator.action_auto_rotate(rotator.load_yaml("config.yaml"))))
+PY
+
 poetry run wayfinder runner start
 poetry run wayfinder runner add-job \
   --name stable-rotator-auto \
   --type script \
-  --script-path paths/stablecoin-yield-rotator/scripts/main.py \
-  --arg --action --arg auto-rotate \
+  --script-path .wayfinder_runs/library/stablecoin-yield-rotator/auto_rotate.py \
   --cron "0 9 * * *" --timezone America/Toronto   # daily at 09:00
 ```
 
