@@ -1468,3 +1468,87 @@ async def test_resolve_ambiguous_no_remote_blank_config_raises():
     with patch("main.load_wallets", AsyncMock(return_value=wallets)):
         with pytest.raises(SystemExit):
             await rotator._resolve_wallet_label({"wallet": None})
+
+
+# ---------------------------------------------------------------------------
+# 429 handling: rate-limit detection, bounded+retried reads, scan_all retry/cap
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio  # noqa: E402
+
+
+def test_is_rate_limit_error_detects_429_variants():
+    assert venues.is_rate_limit_error(RuntimeError("429, message='Too Many Requests'"))
+    assert venues.is_rate_limit_error(RuntimeError("aave_v3 get_all_markets failed: 429"))
+    assert venues.is_rate_limit_error(Exception("rate limit exceeded"))
+    assert not venues.is_rate_limit_error(RuntimeError("boom: revert"))
+    assert not venues.is_rate_limit_error(ValueError("no liquidity"))
+
+
+async def test_run_bounded_retries_rate_limit_then_succeeds():
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("429, message='Too Many Requests'")
+        return "ok"
+
+    sem = _asyncio.Semaphore(2)
+    with patch("venues.asyncio.sleep", AsyncMock()):  # don't actually wait
+        result = await venues.run_bounded(sem, flaky)
+    assert result == "ok"
+    assert calls["n"] == 3
+
+
+async def test_run_bounded_does_not_retry_non_rate_limit():
+    calls = {"n": 0}
+
+    async def boom():
+        calls["n"] += 1
+        raise RuntimeError("hard revert")
+
+    sem = _asyncio.Semaphore(1)
+    with pytest.raises(RuntimeError, match="hard revert"):
+        await venues.run_bounded(sem, boom)
+    assert calls["n"] == 1  # no retry
+
+
+async def test_scan_all_retries_transient_429(monkeypatch):
+    # One venue/chain 429s once then succeeds; scan_all should return its rows.
+    attempts = {"n": 0}
+    usdc = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+    async def flaky_scan(adapter, chain_id, allowed):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("aave_v3 get_all_markets failed on chain 8453: 429, message='Too Many Requests'")
+        return [VenueRow(venue="aave_v3", chain_id=chain_id, asset_symbol="USDC",
+                         asset_address=usdc, market_id=usdc, decimals=6, supply_apy=0.04,
+                         utilization=0.5, supply_cap_headroom_raw=None, tvl_usd=None)]
+
+    monkeypatch.setitem(venues._SCAN_FNS, "aave_v3", flaky_scan)
+    with (
+        patch("venues.get_read_adapter", AsyncMock(return_value=object())),
+        patch("venues.asyncio.sleep", AsyncMock()),
+    ):
+        rows = await venues.scan_all(["aave_v3"], [8453], ["USDC"], strict=True)
+    assert len(rows) == 1
+    assert attempts["n"] == 2  # failed once, retried, succeeded
+
+
+async def test_scan_all_caps_concurrency(monkeypatch):
+    # Track peak concurrent scan-fn executions; must not exceed the cap.
+    state = {"cur": 0, "peak": 0}
+
+    async def slow_scan(adapter, chain_id, allowed):
+        state["cur"] += 1
+        state["peak"] = max(state["peak"], state["cur"])
+        await _asyncio.sleep(0)  # yield so others can start
+        state["cur"] -= 1
+        return []
+
+    monkeypatch.setitem(venues._SCAN_FNS, "aave_v3", slow_scan)
+    with patch("venues.get_read_adapter", AsyncMock(return_value=object())):
+        await venues.scan_all(["aave_v3"], [1, 137, 8453, 42161], ["USDC"], strict=True, concurrency=2)
+    assert state["peak"] <= 2
