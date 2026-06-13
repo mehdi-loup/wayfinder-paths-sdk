@@ -62,6 +62,13 @@ STABLE_DECIMALS_18 = {"DAI", "USDS", "USDE", "GHO"}
 # Moonwell mToken exchange-rate scaling (matches the adapter's own 1e18 convention).
 MANTISSA = 10**18
 
+# Minimal mToken ABI for batching position reads (balanceOf is ERC-20; underlying =
+# mtoken_balance × exchangeRateStored / 1e18, the same Compound convention the scan uses).
+_MTOKEN_EXCHANGE_RATE_ABI = [{
+    "constant": True, "inputs": [], "name": "exchangeRateStored",
+    "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function",
+}]
+
 # All reads go through the Wayfinder RPC proxy, which rate-limits per API key. The
 # full (venue, chain) + balance fan-out of a quote can trip 429s, so bound how many
 # reads are in flight at once and retry the rest with backoff.
@@ -573,33 +580,45 @@ async def _euler_positions(adapter: EulerV2Adapter, chain_id: int, allowed: set[
     ])
     positions.extend(p for p in held_rows if p is not None)
 
-    # AccountLens only reports EVC-enabled vaults. Plain supply-only deposits hold
-    # shares without being enabled, so share-scan the discovered stable vaults too.
-    async with web3_from_chain_id(chain_id) as web3:
-        acct = web3.to_checksum_address(account)
+    # AccountLens only reports EVC-enabled vaults. Plain supply-only deposits hold shares
+    # without being enabled, so share-scan the discovered stable vaults too — but detect
+    # holdings with a single batched balanceOf multicall, then read assets/underlying only
+    # for the (rare) vaults actually held.
+    candidates = [v for v in discovered if v.lower() not in seen_vaults]
+    if candidates:
+        async with web3_from_chain_id(chain_id) as web3:
+            mc = MulticallAdapter(web3=web3, chain_id=chain_id)
+            acct = web3.to_checksum_address(account)
+            try:
+                bal_res = await mc.aggregate([mc.encode_erc20_balance(v, acct) for v in candidates])
+                held_vaults = [
+                    v for v, shares in zip(candidates, (MulticallAdapter.decode_uint256(d) for d in bal_res.return_data), strict=False)
+                    if shares > 0
+                ]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"euler fallback balance multicall failed on chain {chain_id}: {exc}")
+                held_vaults = []
 
-        async def _share_position(vault: str, meta: dict[str, Any]) -> Position | None:
-            if vault.lower() in seen_vaults:
-                return None
-            contract = web3.eth.contract(address=web3.to_checksum_address(vault), abi=ERC4626_ABI)
-            shares = int(await contract.functions.balanceOf(acct).call(block_identifier="latest") or 0)
-            if shares <= 0:
-                return None
-            assets = int(await contract.functions.convertToAssets(shares).call(block_identifier="latest") or 0)
-            if assets <= 0:
-                return None
-            symbol = _asset_symbol(meta["symbol"])
-            decimals = 18 if symbol in STABLE_DECIMALS_18 else 6
-            ok_i, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
-            underlying = str(info.get("asset") or "") if (ok_i and isinstance(info, dict)) else ""
-            return Position(
-                venue="euler_v2", chain_id=chain_id, asset_symbol=symbol,
-                asset_address=underlying, market_id=vault, decimals=decimals,
-                supply_raw=assets, supply_usd=assets / (10**decimals),
-            )
+            async def _held_share(vault: str) -> Position | None:
+                contract = web3.eth.contract(address=web3.to_checksum_address(vault), abi=ERC4626_ABI)
+                shares = int(await contract.functions.balanceOf(acct).call(block_identifier="latest") or 0)
+                if shares <= 0:
+                    return None
+                assets = int(await contract.functions.convertToAssets(shares).call(block_identifier="latest") or 0)
+                if assets <= 0:
+                    return None
+                symbol = _asset_symbol(discovered[vault]["symbol"])
+                decimals = 18 if symbol in STABLE_DECIMALS_18 else 6
+                ok_i, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
+                underlying = str(info.get("asset") or "") if (ok_i and isinstance(info, dict)) else ""
+                return Position(
+                    venue="euler_v2", chain_id=chain_id, asset_symbol=symbol,
+                    asset_address=underlying, market_id=vault, decimals=decimals,
+                    supply_raw=assets, supply_usd=assets / (10**decimals),
+                )
 
-        fallback = await asyncio.gather(*[_share_position(v, m) for v, m in discovered.items()])
-    positions.extend(p for p in fallback if p is not None)
+            fallback = await asyncio.gather(*[_held_share(v) for v in held_vaults])
+        positions.extend(p for p in fallback if p is not None)
     return positions
 
 
@@ -733,25 +752,39 @@ async def _moonwell_positions(adapter: MoonwellAdapter, chain_id: int, allowed: 
     ok, markets = await adapter.get_all_markets(include_apy=False, include_rewards=False, include_usd=False)
     if not ok or not isinstance(markets, list):
         raise RuntimeError(f"moonwell get_all_markets failed on chain {chain_id}: {markets}")
+    # Keep every stable market — incl. duplicate symbols like legacy USDbC under "mUSDC" —
+    # so a holder of any of them is found, not just the deepest-TVL one.
+    stable = [m for m in markets if _matches_asset(_moonwell_underlying_symbol(m.get("symbol")), allowed)]
+    if not stable:
+        return []
+
+    # One multicall: balanceOf + exchangeRateStored per stable mToken, instead of a
+    # per-mToken get_pos (which was ~15 reads each).
+    async with web3_from_chain_id(chain_id) as web3:
+        mc = MulticallAdapter(web3=web3, chain_id=chain_id)
+        acct = web3.to_checksum_address(account)
+        calls = []
+        for m in stable:
+            mtoken = web3.to_checksum_address(str(m.get("mtoken")))
+            erc = web3.eth.contract(address=mtoken, abi=_MTOKEN_EXCHANGE_RATE_ABI)
+            calls.append(mc.encode_erc20_balance(mtoken, acct))
+            calls.append(mc.build_call(mtoken, erc.encode_abi("exchangeRateStored", args=[])))
+        data = list((await mc.aggregate(calls)).return_data)
+
     positions: list[Position] = []
-    for m in markets:
-        underlying_symbol = _moonwell_underlying_symbol(m.get("symbol"))
-        if not _matches_asset(underlying_symbol, allowed):
-            continue
-        mtoken = str(m.get("mtoken"))
-        ok_pos, pos = await adapter.get_pos(mtoken=mtoken, account=account)
-        if not ok_pos or not isinstance(pos, dict):
-            continue
-        supply_raw = int(pos.get("underlying_balance") or 0)
+    for i, m in enumerate(stable):
+        mtoken_balance = MulticallAdapter.decode_uint256(data[2 * i]) if 2 * i < len(data) else 0
+        exchange_rate = MulticallAdapter.decode_uint256(data[2 * i + 1]) if 2 * i + 1 < len(data) else 0
+        supply_raw = (mtoken_balance * exchange_rate) // MANTISSA if exchange_rate else 0
         if supply_raw <= 0:
             continue
-        symbol = _asset_symbol(underlying_symbol)
+        symbol = _asset_symbol(_moonwell_underlying_symbol(m.get("symbol")))
         positions.append(Position(
             venue="moonwell",
             chain_id=chain_id,
             asset_symbol=symbol,
             asset_address=str(m.get("underlying") or ""),
-            market_id=mtoken,
+            market_id=str(m.get("mtoken")),
             decimals=18 if symbol in STABLE_DECIMALS_18 else 6,
             supply_raw=supply_raw,
             supply_usd=None,
