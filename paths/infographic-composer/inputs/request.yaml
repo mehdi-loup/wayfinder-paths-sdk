@@ -1,0 +1,13 @@
+# Defaults used when an argument is omitted from the CLI.
+default_action: how-it-works
+default_adapter: aave_v3_adapter
+default_asset: USDC
+default_chain: base
+default_style: default
+min_tvl_usd: 100000
+serve:
+  enabled: false
+  host: 127.0.0.1
+  port: 8765
+artifacts_root: .wf-artifacts
+cache_root: .wf-cache/infographic-composer

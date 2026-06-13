@@ -1,0 +1,328 @@
+version: 1
+adapters:
+  aave_v3_adapter:
+    protocol: Aave V3
+    verification:
+      stablecoin-rates: verified
+      how-it-works: verified
+      market-snapshot: template-compatible
+      compare-protocols: verified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_all_markets
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+    - polygon
+  morpho_adapter:
+    protocol: Morpho
+    verification:
+      stablecoin-rates: verified
+      how-it-works: verified
+      market-snapshot: template-compatible
+      compare-protocols: verified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_all_markets
+    - get_all_vaults
+    chains:
+    - base
+    - ethereum
+  moonwell_adapter:
+    protocol: Moonwell
+    verification:
+      stablecoin-rates: verified
+      how-it-works: verified
+      market-snapshot: template-compatible
+      compare-protocols: verified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_all_markets
+    - get_apy
+    chains:
+    - base
+    - optimism
+  hyperliquid_adapter:
+    protocol: Hyperliquid
+    verification:
+      how-it-works: verified
+      market-snapshot: verified
+      compare-protocols: template-compatible
+    use_cases:
+    - perps
+    live_reads:
+    - get_meta_and_asset_ctxs
+    - get_funding_history
+    chains:
+    - hyperevm
+  pendle_adapter:
+    protocol: Pendle
+    verification:
+      how-it-works: verified
+      market-snapshot: verified
+      compare-protocols: template-compatible
+    use_cases:
+    - stablecoin-lending
+    - restaking
+    live_reads:
+    - get_markets
+    - get_market_time_series
+    chains:
+    - ethereum
+    - arbitrum
+    - base
+    - plasma
+  polymarket_adapter:
+    protocol: Polymarket
+    verification:
+      how-it-works: verified
+      market-snapshot: verified
+      compare-protocols: unsupported-v0.1
+    use_cases:
+    - prediction-markets
+    live_reads:
+    - get_markets
+    - get_orderbook
+    chains:
+    - polygon
+  pool_adapter:
+    protocol: Pool Adapter
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - lp
+    live_reads:
+    - search_pools
+    - get_pool
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+    - polygon
+  aerodrome_adapter:
+    protocol: Aerodrome
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - lp
+    live_reads:
+    - get_pools
+    - get_pool
+    chains:
+    - base
+  aerodrome_slipstream_adapter:
+    protocol: Aerodrome Slipstream
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - lp
+    live_reads:
+    - get_positions
+    - get_pools
+    chains:
+    - base
+  uniswap_adapter:
+    protocol: Uniswap
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - lp
+    live_reads:
+    - get_pool
+    - get_position
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+    - polygon
+  euler_v2_adapter:
+    protocol: Euler V2
+    verification:
+      stablecoin-rates: template-compatible-unverified
+      how-it-works: template-compatible
+      compare-protocols: template-compatible-unverified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_vaults
+    chains:
+    - ethereum
+    - base
+  sparklend_adapter:
+    protocol: SparkLend
+    verification:
+      stablecoin-rates: template-compatible-unverified
+      how-it-works: template-compatible
+      compare-protocols: template-compatible-unverified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_all_markets
+    chains:
+    - ethereum
+  hyperlend_adapter:
+    protocol: HyperLend
+    verification:
+      stablecoin-rates: template-compatible-unverified
+      how-it-works: template-compatible
+      compare-protocols: template-compatible-unverified
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_all_markets
+    chains:
+    - hyperevm
+  ethena_vault_adapter:
+    protocol: Ethena Vault
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - stablecoin-lending
+    - restaking
+    live_reads:
+    - get_vaults
+    chains:
+    - ethereum
+  etherfi_adapter:
+    protocol: Ether.fi
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - restaking
+    live_reads:
+    - get_positions
+    - get_vaults
+    chains:
+    - ethereum
+  lido_adapter:
+    protocol: Lido
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - restaking
+    live_reads:
+    - get_status
+    chains:
+    - ethereum
+  eigencloud_adapter:
+    protocol: EigenCloud
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - restaking
+    live_reads:
+    - get_vaults
+    chains:
+    - ethereum
+  brap_adapter:
+    protocol: BRAP
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - routing
+    live_reads:
+    - quote_swap
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+  boros_adapter:
+    protocol: Boros
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - stablecoin-lending
+    live_reads:
+    - get_markets
+    chains:
+    - ethereum
+  token_adapter:
+    protocol: Token Adapter
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: unsupported-v0.1
+    use_cases:
+    - token-data
+    live_reads:
+    - get_token
+    - get_price
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+  balance_adapter:
+    protocol: Balance Adapter
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: unsupported-v0.1
+    use_cases:
+    - wallet-data
+    live_reads:
+    - get_balances
+    chains:
+    - ethereum
+    - base
+    - arbitrum
+  ccxt_adapter:
+    protocol: CCXT
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - perps
+    live_reads:
+    - fetch_ticker
+    - fetch_markets
+    chains:
+    - offchain
+  projectx_adapter:
+    protocol: ProjectX
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - perps
+    live_reads:
+    - get_markets
+    chains:
+    - offchain
+  avantis_adapter:
+    protocol: Avantis
+    verification:
+      how-it-works: template-compatible
+      market-snapshot: template-compatible
+      compare-protocols: template-compatible
+    use_cases:
+    - perps
+    live_reads:
+    - get_markets
+    chains:
+    - base

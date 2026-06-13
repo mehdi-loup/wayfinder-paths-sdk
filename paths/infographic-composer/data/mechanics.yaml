@@ -1,0 +1,173 @@
+version: 1
+adapters:
+  aave_v3_adapter:
+    primitive: Overcollateralized lending market
+    mechanism_summary: Aave V3 coordinates suppliers, borrowers, reserves, collateral rules, interest-rate curves, and liquidation thresholds inside isolated pool markets.
+    official_docs:
+    - https://aave.com/docs/developers/overview
+    - https://aave.com/docs/developers/smart-contracts/pool
+    actors:
+    - Suppliers
+    - Borrowers
+    - Liquidators
+    - Risk governance
+    state:
+    - Reserve liquidity
+    - Collateral configuration
+    - Utilization
+    - Health factor
+    mechanism_steps:
+    - User supplies an asset into a reserve and receives an interest-bearing position.
+    - The reserve tracks available liquidity, debt, collateral rules, caps, and interest indexes.
+    - Borrowers draw liquidity against enabled collateral while health factor stays above liquidation bounds.
+    - Utilization updates the variable rate curve, changing supplier and borrower APYs.
+    - Liquidators can repay unhealthy debt and receive collateral according to protocol parameters.
+    adapter_boundary:
+    - Read reserve lists, supply APY, borrow APY, collateral flags, caps, and rewards.
+    - Execution functions exist in the adapter manifest, but infographic generation never calls them.
+  morpho_adapter:
+    primitive: Isolated lending markets and curated vault allocation
+    mechanism_summary: Morpho exposes isolated lending markets and vaults where risk depends on loan asset, collateral asset, oracle, interest-rate model, LLTV, and curator allocation.
+    official_docs:
+    - https://docs.morpho.org/
+    - https://docs.morpho.org/concepts/morpho-blue/
+    actors:
+    - Suppliers
+    - Borrowers
+    - Vault curators
+    - Liquidators
+    state:
+    - Market params
+    - Oracle
+    - LLTV
+    - Vault allocation
+    mechanism_steps:
+    - A market defines one loan asset, one collateral asset, an oracle, an interest-rate model, and LLTV.
+    - Suppliers lend directly to a market or through a vault that allocates across markets.
+    - Borrowers post the configured collateral and borrow the loan asset within LLTV constraints.
+    - Interest accrues according to market utilization and the interest-rate model.
+    - Vault curators can adjust allocations, changing realized exposure for vault depositors.
+    adapter_boundary:
+    - Read markets, vaults, state, historical APY, rewards, liquidity, and allocator context.
+    - Authorization, deposit, withdrawal, and reallocation calls are outside this path's read-only scope.
+  moonwell_adapter:
+    primitive: Compound-style money market
+    mechanism_summary: Moonwell money markets use mTokens, comptroller risk checks, interest-rate models, liquidity indexes, and reward distribution over Base and supported deployments.
+    official_docs:
+    - https://docs.moonwell.fi/
+    actors:
+    - Suppliers
+    - Borrowers
+    - Liquidators
+    - Reward distributor
+    state:
+    - mToken exchange rate
+    - Collateral factor
+    - Cash and borrows
+    - Reward emissions
+    mechanism_steps:
+    - User supplies an underlying token and receives mTokens that track exchange-rate growth.
+    - The market tracks cash, borrows, reserves, collateral factor, and pause status.
+    - Borrowers enter markets as collateral and borrow against account liquidity.
+    - Supply and borrow rates update from market utilization and protocol parameters.
+    - Reward emissions can add token-denominated APY on top of base supply yield.
+    adapter_boundary:
+    - Read markets, mToken metadata, supply APY, borrow APY, collateral factors, and rewards.
+    - Lending, borrowing, collateral changes, and reward claims are never invoked by this path.
+  hyperliquid_adapter:
+    primitive: Perpetual futures exchange
+    mechanism_summary: Hyperliquid markets combine oracle/mark pricing, open interest, funding, leverage constraints, and orderbook liquidity for perpetual trading.
+    official_docs:
+    - https://hyperliquid.gitbook.io/hyperliquid-docs/
+    actors:
+    - Traders
+    - Market makers
+    - Liquidation engine
+    - Validators
+    state:
+    - Mark price
+    - Oracle price
+    - Funding
+    - Open interest
+    mechanism_steps:
+    - Traders open long or short perp exposure against margin.
+    - The market publishes mark price, oracle price, funding, open interest, and size constraints.
+    - Funding transfers value between long and short sides according to market imbalance.
+    - Leverage and margin determine liquidation thresholds.
+    - Orderbook depth and spread determine practical entry and exit quality.
+    adapter_boundary:
+    - Read market metadata, funding, orderbook, candles, vaults, and positions when available.
+    - Order execution, cancellation, transfers, and withdrawals are outside infographic scope.
+  pendle_adapter:
+    primitive: Fixed-yield and yield-token markets
+    mechanism_summary: Pendle splits yield-bearing assets into principal and yield components so markets can price fixed yield, floating yield, maturity, and implied APY.
+    official_docs:
+    - https://docs.pendle.finance/
+    actors:
+    - PT holders
+    - YT holders
+    - Liquidity providers
+    - Swappers
+    state:
+    - Maturity
+    - Implied APY
+    - PT price
+    - Market liquidity
+    mechanism_steps:
+    - A yield-bearing asset is tokenized into principal exposure and yield exposure.
+    - PT holders target fixed-yield-like exposure through maturity redemption mechanics.
+    - YT holders receive floating yield exposure from the underlying source.
+    - Markets price PT/YT trades through liquidity, maturity, implied APY, and demand.
+    - Realized output depends on market depth, expiry, and underlying protocol behavior.
+    adapter_boundary:
+    - Read markets, market time series, prices, maturities, and swap transaction previews where exposed.
+    - Hosted SDK swap construction is not used by infographic generation.
+  polymarket_adapter:
+    primitive: Prediction market orderbook
+    mechanism_summary: Polymarket markets price discrete outcomes through orderbook liquidity, outcome tokens, market resolution terms, and settlement flows.
+    official_docs:
+    - https://docs.polymarket.com/
+    actors:
+    - Traders
+    - Liquidity providers
+    - Market resolvers
+    - Orderbook makers
+    state:
+    - Outcome prices
+    - Orderbook depth
+    - Spread
+    - Resolution terms
+    mechanism_steps:
+    - A market defines outcomes and resolution criteria.
+    - Traders buy or sell outcome exposure through orderbook liquidity.
+    - Prices move with supply, demand, information, spread, and remaining time.
+    - Market resolution determines which outcome token settles.
+    - Liquidity and spread affect how reliable a displayed price is for sizing.
+    adapter_boundary:
+    - Read markets, orderbooks, and positions when available.
+    - Trading and CLOB signing are outside this infographic path's scope.
+categories:
+  Lending:
+    primitive: Lending and borrowing protocol
+    mechanism_summary: Lending protocols match asset suppliers with borrowers through market state, collateral rules, utilization, rates, and liquidation paths.
+    mechanism_steps:
+    - Suppliers add liquidity to a market or vault.
+    - Borrowers draw liquidity against eligible collateral.
+    - Utilization changes rate curves and realized APY.
+    - Risk parameters control collateral, caps, and liquidation.
+  Liquidity:
+    primitive: Liquidity pool or LP position
+    mechanism_summary: Liquidity protocols coordinate asset inventory, pool pricing, fees, incentives, and LP exposure.
+    mechanism_steps:
+    - LPs deposit assets into a pool or range.
+    - Traders route through pool liquidity and pay fees.
+    - LP returns come from fees and incentives.
+    - Price movement can change inventory and range status.
+  Perpetuals:
+    primitive: Perpetual derivatives market
+    mechanism_summary: Perpetual markets combine margin, funding, oracle/mark pricing, open interest, and liquidation constraints.
+    mechanism_steps:
+    - Traders post margin and open long or short exposure.
+    - Mark and oracle prices drive PnL and liquidation checks.
+    - Funding transfers value between long and short sides.
+    - Liquidity and open interest shape execution quality.
