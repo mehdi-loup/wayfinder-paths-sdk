@@ -50,7 +50,7 @@ poetry run wayfinder runner add-job \
   --type script \
   --script-path paths/stablecoin-yield-rotator/scripts/main.py \
   --arg --action --arg auto-rotate \
-  --interval 3600
+  --cron "0 9 * * *" --timezone America/Toronto   # daily at 09:00
 ```
 
 `auto-rotate` executes the rotation plan **without interactive confirmation** — the
