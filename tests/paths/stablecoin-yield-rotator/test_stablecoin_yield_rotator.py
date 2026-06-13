@@ -1725,3 +1725,59 @@ async def test_erc4626_share_positions_batches_balance_then_convert():
     assert len(out) == 1
     assert out[0].market_id == "0x" + "b" * 40
     assert out[0].supply_raw == 1000
+
+
+async def test_moonwell_positions_batched_no_get_pos():
+    from venues import _moonwell_positions  # noqa: PLC0415
+
+    from wayfinder_paths.adapters.multicall_adapter.adapter import (
+        MulticallResult,  # noqa: PLC0415
+    )
+
+    adapter = AsyncMock()
+    adapter.get_all_markets = AsyncMock(return_value=(True, [
+        {"symbol": "mUSDC", "mtoken": "0x" + "c" * 40, "underlying": USDC_ADDRESS},
+        {"symbol": "mWETH", "mtoken": "0x" + "e" * 40, "underlying": "0x" + "f" * 40},  # non-stable → skipped
+    ]))
+    u256 = lambda n: n.to_bytes(32, "big")  # noqa: E731
+
+    class FakeMC:
+        decode_uint256 = staticmethod(lambda d: int.from_bytes(d, "big"))
+
+        def __init__(self, **kw):
+            pass
+
+        def encode_erc20_balance(self, token, acct):
+            return ("bal", token)
+
+        def build_call(self, addr, data):
+            return ("er", addr)
+
+        async def aggregate(self, calls):
+            # one stable mToken → [balanceOf=200 mtokens, exchangeRate=2e18] → underlying 400
+            return MulticallResult(block_number=1, return_data=(u256(200), u256(2 * 10**18)))
+
+    class FakeEth:
+        def contract(self, address=None, abi=None):
+            c = AsyncMock()
+            c.encode_abi = lambda fn, args: b""
+            return c
+
+    class FakeWeb3:
+        eth = FakeEth()
+
+        def to_checksum_address(self, a):
+            return a
+
+    @asynccontextmanager
+    async def fake_w3(chain_id):
+        yield FakeWeb3()
+
+    with (patch("venues.MulticallAdapter", FakeMC), patch("venues.web3_from_chain_id", fake_w3)):
+        positions = await _moonwell_positions(adapter, 8453, {"USDC"}, "0xACC")
+
+    adapter.get_pos.assert_not_called()  # batched, not per-mToken get_pos
+    assert len(positions) == 1
+    assert positions[0].asset_symbol == "USDC"
+    assert positions[0].market_id == "0x" + "c" * 40
+    assert positions[0].supply_raw == 400  # 200 * 2e18 // 1e18
