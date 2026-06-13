@@ -4,7 +4,8 @@ Notable changes to the Stablecoin Yield Rotator path.
 
 ## 0.2.0
 
-Automation, safer wallet handling, and a large cut in API request volume.
+Automation, safer wallet handling, and a large cut in API request volume. No changes to
+supported assets or venues — purely new actions, reliability, and efficiency over 0.1.6.
 
 ### Added
 
@@ -42,9 +43,13 @@ Automation, safer wallet handling, and a large cut in API request volume.
   wallet-agnostic APY/TVL ranking; wallet positions are always read live and target venues
   are re-checked before any fund-moving execution.
 
-### Upgrading from 0.1.x
+## 0.1.6
 
-0.1.6 expanded coverage to **USDS, USDe, and GHO** and added **Polygon** (alongside
-Ethereum, Base, Arbitrum, and HyperEVM), the **Moonwell** venue, an applet refresh, and a
-zero-APY market filter. After upgrading, review `inputs/config.yaml` — especially `assets`,
-`chains`, `venues`, and the new `rpc_concurrency` and `scan_cache_ttl_seconds` keys.
+- Added stablecoins **USDS, USDe, and GHO** and the **Polygon** network (joining Ethereum,
+  Base, Arbitrum, and HyperEVM); widened Morpho to Arbitrum/Polygon and Euler to HyperEVM.
+- Excluded zero-APY (sub-1bp) markets from the ranked scan.
+- Applet: venues / networks summary cards and 50-row pagination; refreshed scan snapshot.
+
+## 0.1.5
+
+- Added the **Moonwell** venue; applet refresh and rotation safety fixes.
