@@ -82,7 +82,7 @@ from wayfinder_paths.runner.monitor_state import (  # noqa: E402
 )
 
 SCAN_CACHE_DIR = PATH_DIR / "inputs" / ".scan_cache"
-SCAN_CACHE_TTL_SECONDS = 900
+SCAN_CACHE_TTL_SECONDS = 21600  # 6h
 SCAN_CACHE_SCHEMA_VERSION = 1
 
 # ---------------------------------------------------------------------------

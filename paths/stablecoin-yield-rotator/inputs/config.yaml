@@ -19,6 +19,6 @@ ledger_record: true
 # Max concurrent reads through the Wayfinder RPC proxy (rate-limited per API key).
 # Reads also retry 429s with backoff; lower this if you still see rate-limit errors.
 rpc_concurrency: 4
-# Ranked-scan cache lifetime (seconds). Raise to >= your auto-rotate interval so a
-# scheduled run reuses the cache instead of re-scanning every time (default 900 = 15m).
-scan_cache_ttl_seconds: 900
+# Ranked-scan cache lifetime (seconds). Default 21600 = 6h. Positions are always read
+# live; only the (wallet-agnostic) APY/TVL ranking is cached. Lower for fresher ranking.
+scan_cache_ttl_seconds: 21600
