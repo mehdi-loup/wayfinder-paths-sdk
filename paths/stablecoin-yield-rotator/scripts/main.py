@@ -56,6 +56,7 @@ from venues import (  # noqa: E402
 )
 
 from wayfinder_paths.adapters.brap_adapter.adapter import BRAPAdapter  # noqa: E402
+from wayfinder_paths.adapters.multicall_adapter import MulticallAdapter  # noqa: E402
 from wayfinder_paths.core.clients.NotifyClient import NOTIFY_CLIENT  # noqa: E402
 from wayfinder_paths.core.clients.TokenClient import TOKEN_CLIENT  # noqa: E402
 from wayfinder_paths.core.constants.chains import (  # noqa: E402
@@ -182,11 +183,12 @@ async def _scan_all_cached(
 ) -> list[VenueRow]:
     path = _scan_cache_path(config, strict=strict)
     now = time.time()
+    ttl = int(config.get("scan_cache_ttl_seconds", SCAN_CACHE_TTL_SECONDS))
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))
         if (
             cached.get("schema") == SCAN_CACHE_SCHEMA_VERSION
-            and now - float(cached["ts"]) <= SCAN_CACHE_TTL_SECONDS
+            and now - float(cached["ts"]) <= ttl
         ):
             if failure_log is not None:
                 failure_log.extend(cached.get("failures") or [])
@@ -833,21 +835,73 @@ TOPUP_MIN_STABLE_USD = 5.0
 TOPUP_FALLBACK_USD = 15.0
 
 
-async def _gas_topup_state(
-    chains: list[int], address: str, min_gas_wei: int,
+async def _fetch_chain_balances(
+    scan: list[VenueRow], chains: list[int], address: str,
     *, semaphore: asyncio.Semaphore | None = None,
+) -> dict[int, dict[str, Any]]:
+    """One Multicall3 read per chain: native gas + every distinct stable token seen in
+    `scan` on that chain. Returns {chain_id: {"native": wei | None, "tokens": {addr_lower: wei}}}.
+    Degrades gracefully (native=None, tokens={}) when a chain's multicall fails (e.g. no
+    Multicall3 deployed) — callers fall back / skip rather than crash."""
+    sem = semaphore or asyncio.Semaphore(DEFAULT_RPC_CONCURRENCY)
+    zero = {"", "none", "0x0000000000000000000000000000000000000000"}
+    tokens_by_chain: dict[int, list[str]] = {}
+    for row in scan:
+        if row.chain_id not in chains:
+            continue
+        addr = row.asset_address.strip()
+        if addr.lower() in zero:
+            continue
+        bucket = tokens_by_chain.setdefault(row.chain_id, [])
+        if addr not in bucket:
+            bucket.append(addr)
+
+    async def _one(chain_id: int) -> tuple[int, dict[str, Any]]:
+        token_addrs = tokens_by_chain.get(chain_id, [])
+
+        async def _call() -> dict[str, Any]:
+            async with web3_from_chain_id(chain_id) as web3:
+                mc = MulticallAdapter(web3=web3, chain_id=chain_id)
+                acct = web3.to_checksum_address(address)
+                calls = [mc.encode_eth_balance(acct)]
+                calls += [mc.encode_erc20_balance(t, acct) for t in token_addrs]
+                res = await mc.aggregate(calls)
+                data = list(res.return_data)
+                native = MulticallAdapter.decode_uint256(data[0]) if data else None
+                tokens = {
+                    t.lower(): (MulticallAdapter.decode_uint256(data[i]) if i < len(data) else 0)
+                    for i, t in enumerate(token_addrs, start=1)
+                }
+                return {"native": native, "tokens": tokens}
+
+        try:
+            return chain_id, await run_bounded(sem, _call)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"chain balance multicall failed for {chain_id}: {exc}")
+            return chain_id, {"native": None, "tokens": {}}
+
+    results = await asyncio.gather(*[_one(c) for c in chains])
+    return dict(results)
+
+
+async def _gas_topup_state(
+    chains: list[int], min_gas_wei: int, chain_balances: dict[int, dict[str, Any]],
+    *, address: str, semaphore: asyncio.Semaphore | None = None,
 ) -> dict[str, Any]:
     """Native gas balances per chain plus top-up estimates for starved chains.
 
-    Returns {"balances": {chain_id: wei | None}, "starved": set[int],
-    "topups": {chain_id: {needed_wei, target_wei, topup_usd_cost, native_token}}}.
-    A chain whose balance can't be read is treated as funded — the execution-time
-    gas guard catches it; failing to price a native token falls back to a flat
-    conservative cost so the rotation decision stays gas-aware.
+    Reuses the native balances from the per-chain multicall (`chain_balances`); only
+    falls back to a direct read when the multicall couldn't read a chain (gas is
+    safety-relevant, so we don't want to silently treat it as funded). Returns
+    {"balances": {chain_id: wei | None}, "starved": set[int], "topups": {...}}. Pricing
+    a native token failing falls back to a flat conservative cost.
     """
     sem = semaphore or asyncio.Semaphore(DEFAULT_RPC_CONCURRENCY)
 
     async def _bal(chain_id: int) -> int | None:
+        cached = (chain_balances.get(chain_id) or {}).get("native")
+        if cached is not None:
+            return int(cached)
         try:
             return await run_bounded(sem, lambda: _gas_balance_wei(chain_id, address))
         except Exception as exc:  # noqa: BLE001
@@ -886,17 +940,12 @@ async def _gas_topup_state(
     return {"balances": balances, "starved": starved, "topups": topups}
 
 
-async def _idle_wallet_positions(
-    scan: list[VenueRow], address: str,
-    *, semaphore: asyncio.Semaphore | None = None,
+def _idle_positions_from_balances(
+    scan: list[VenueRow], chain_balances: dict[int, dict[str, Any]],
 ) -> list[Position]:
-    """Idle configured-stable balances in the wallet, as pseudo-positions earning 0%.
-
-    Token addresses come from scan rows, so only (asset, chain) pairs with at least
-    one scanned venue are swept. Per-token read failures are logged and skipped —
-    a flaky RPC must not block planning for real positions.
-    """
-    sem = semaphore or asyncio.Semaphore(DEFAULT_RPC_CONCURRENCY)
+    """Idle configured-stable balances as 0%-APY pseudo-positions, read from the
+    per-chain multicall results (no extra I/O). Token addresses come from scan rows,
+    so only (asset, chain) pairs with at least one scanned venue are swept."""
     zero_addresses = {"", "none", "0x0000000000000000000000000000000000000000"}
     by_key: dict[tuple[str, int], VenueRow] = {}
     for row in scan:
@@ -904,17 +953,13 @@ async def _idle_wallet_positions(
         if key not in by_key and row.asset_address.strip().lower() not in zero_addresses:
             by_key[key] = row
 
-    async def _position(asset: str, chain_id: int, row: VenueRow) -> Position | None:
-        try:
-            balance = await run_bounded(sem, lambda: get_token_balance(
-                token_address=row.asset_address, chain_id=chain_id, wallet_address=address,
-            ))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"idle balance read failed for {asset}@{chain_id}: {exc}")
-            return None
-        if balance / (10 ** row.decimals) < IDLE_DUST_HUMAN:
-            return None
-        return Position(
+    out: list[Position] = []
+    for (asset, chain_id), row in by_key.items():
+        tokens = (chain_balances.get(chain_id) or {}).get("tokens") or {}
+        balance = tokens.get(row.asset_address.strip().lower())
+        if balance is None or balance / (10 ** row.decimals) < IDLE_DUST_HUMAN:
+            continue
+        out.append(Position(
             venue=WALLET_VENUE,
             chain_id=chain_id,
             asset_symbol=asset,
@@ -923,12 +968,8 @@ async def _idle_wallet_positions(
             decimals=row.decimals,
             supply_raw=balance,
             supply_usd=balance / (10 ** row.decimals),
-        )
-
-    found = await asyncio.gather(
-        *[_position(asset, chain_id, row) for (asset, chain_id), row in by_key.items()]
-    )
-    return [p for p in found if p is not None]
+        ))
+    return out
 
 
 async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[RotationPlan, list[VenueRow], list[Position]]:
@@ -937,24 +978,24 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
     # One semaphore shared across scan + positions + balance reads bounds total
     # in-flight requests to the rate-limited RPC proxy for the whole plan build.
     rpc_sem = asyncio.Semaphore(_rpc_concurrency(config))
+    chains_cfg = [int(c) for c in (config.get("chains") or [])]
     scan, positions = await asyncio.gather(
         _scan_all_cached(config, semaphore=rpc_sem),
         positions_all(
             venues=list(config.get("venues") or []),
-            chains=[int(c) for c in (config.get("chains") or [])],
+            chains=chains_cfg,
             assets=list(config.get("assets") or []),
             account=address,
             semaphore=rpc_sem,
         ),
     )
-    positions = positions + await _idle_wallet_positions(scan, address, semaphore=rpc_sem)
+    # One multicall per chain covers idle stable balances + native gas (reused below).
+    chain_balances = await _fetch_chain_balances(scan, chains_cfg, address, semaphore=rpc_sem)
+    positions = positions + _idle_positions_from_balances(scan, chain_balances)
 
     min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
     gas_state = await _gas_topup_state(
-        chains=[int(c) for c in (config.get("chains") or [])],
-        address=address,
-        min_gas_wei=min_gas_wei,
-        semaphore=rpc_sem,
+        chains_cfg, min_gas_wei, chain_balances, address=address, semaphore=rpc_sem,
     )
 
     plan = quote_rotation(
