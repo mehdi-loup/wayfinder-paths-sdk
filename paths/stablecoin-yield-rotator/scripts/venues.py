@@ -17,9 +17,11 @@ Each venue exposes:
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from eth_utils import to_checksum_address
 from loguru import logger
 
 from wayfinder_paths.adapters.aave_v3_adapter import AaveV3Adapter
@@ -27,7 +29,9 @@ from wayfinder_paths.adapters.euler_v2_adapter import EulerV2Adapter
 from wayfinder_paths.adapters.hyperlend_adapter.adapter import HyperlendAdapter
 from wayfinder_paths.adapters.moonwell_adapter import MoonwellAdapter
 from wayfinder_paths.adapters.morpho_adapter import MorphoAdapter
+from wayfinder_paths.adapters.multicall_adapter import MulticallAdapter
 from wayfinder_paths.adapters.sparklend_adapter.adapter import SparkLendAdapter
+from wayfinder_paths.core.clients.DeltaLabClient import DELTA_LAB_CLIENT
 from wayfinder_paths.core.constants.erc4626_abi import ERC4626_ABI
 from wayfinder_paths.core.utils.retry import retry_async
 from wayfinder_paths.core.utils.symbols import normalize_symbol
@@ -331,37 +335,53 @@ async def _scan_morpho_vault(adapter: MorphoAdapter, chain_id: int, allowed: set
     return rows
 
 
+async def _erc4626_share_positions(
+    chain_id: int, account: str, vault_rows: list[VenueRow], *, venue: str,
+) -> list[Position]:
+    """Which of `vault_rows` (ERC-4626 share tokens) the account holds — batched via
+    Multicall3: one `balanceOf` aggregate across all vaults, then one `convertToAssets`
+    aggregate for the non-zero holdings. Turns ~2N individual reads into ~2 calls.
+    Returns [] (graceful) if the multicall reverts (e.g. no Multicall3 on the chain)."""
+    if not vault_rows:
+        return []
+    try:
+        async with web3_from_chain_id(chain_id) as web3:
+            mc = MulticallAdapter(web3=web3, chain_id=chain_id)
+            acct = web3.to_checksum_address(account)
+            bal_res = await mc.aggregate([mc.encode_erc20_balance(r.market_id, acct) for r in vault_rows])
+            held = [
+                (row, shares)
+                for row, shares in zip(vault_rows, (MulticallAdapter.decode_uint256(d) for d in bal_res.return_data), strict=False)
+                if shares > 0
+            ]
+            if not held:
+                return []
+            conv_calls = []
+            for row, shares in held:
+                vault_addr = web3.to_checksum_address(row.market_id)
+                erc = web3.eth.contract(address=vault_addr, abi=ERC4626_ABI)
+                conv_calls.append(mc.build_call(vault_addr, erc.encode_abi("convertToAssets", args=[shares])))
+            conv_res = await mc.aggregate(conv_calls)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"{venue} share-position multicall failed on chain {chain_id}: {exc}")
+        return []
+
+    positions: list[Position] = []
+    for (row, _shares), data in zip(held, conv_res.return_data, strict=False):
+        assets = MulticallAdapter.decode_uint256(data)
+        if assets <= 0:
+            continue
+        positions.append(Position(
+            venue=venue, chain_id=chain_id, asset_symbol=row.asset_symbol,
+            asset_address=row.asset_address, market_id=row.market_id,
+            decimals=row.decimals, supply_raw=assets, supply_usd=assets / (10**row.decimals),
+        ))
+    return positions
+
+
 async def _morpho_vault_positions(adapter: MorphoAdapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
     rows = await _scan_morpho_vault(adapter, chain_id, allowed)
-    positions: list[Position] = []
-    async with web3_from_chain_id(chain_id) as web3:
-        acct = web3.to_checksum_address(account)
-        sem = asyncio.Semaphore(12)
-
-        async def _position(row: VenueRow) -> Position | None:
-            vault = web3.to_checksum_address(row.market_id)
-            contract = web3.eth.contract(address=vault, abi=ERC4626_ABI)
-            async with sem:
-                shares = int(await contract.functions.balanceOf(acct).call(block_identifier="latest") or 0)
-                if shares <= 0:
-                    return None
-                assets = int(await contract.functions.convertToAssets(shares).call(block_identifier="latest") or 0)
-                if assets <= 0:
-                    return None
-                return Position(
-                    venue="morpho_vault",
-                    chain_id=chain_id,
-                    asset_symbol=row.asset_symbol,
-                    asset_address=row.asset_address,
-                    market_id=row.market_id,
-                    decimals=row.decimals,
-                    supply_raw=assets,
-                    supply_usd=assets / (10**row.decimals),
-                )
-
-        found = await asyncio.gather(*[_position(row) for row in rows])
-    positions.extend(p for p in found if p is not None)
-    return positions
+    return await _erc4626_share_positions(chain_id, account, rows, venue="morpho_vault")
 
 
 # ---------------------------------------------------------------------------
@@ -427,111 +447,159 @@ async def _sparklend_positions(adapter: SparkLendAdapter, chain_id: int, allowed
 
 # ---------------------------------------------------------------------------
 # Euler V2
+#
+# Euler is permissionless — each chain has hundreds of vaults — so enumerating
+# them all (the adapter's get_all_markets) cost ~1250 RPC calls per chain just to
+# keep the handful of stablecoin vaults. Instead we discover the stable vaults via
+# one Delta Lab `screen_lending` call (its `market_external_id` IS the eVault
+# address for Euler) and only read those vaults on-chain.
 # ---------------------------------------------------------------------------
 
+_EULER_DISCOVERY_TTL_S = 60.0
+_euler_discovery_lock = asyncio.Lock()
+# {chain_id: {vault_checksum: {"apy": float, "symbol": str, "is_frozen": bool,
+#  "is_paused": bool, "tvl_usd": float | None}}}
+_euler_discovery_cache: dict[str, Any] = {"ts": 0.0, "by_chain": {}}
+
+
+async def _euler_stable_vaults(chain_id: int, allowed: set[str]) -> dict[str, dict[str, Any]]:
+    """Stable Euler vaults for `chain_id` discovered via Delta Lab, keyed by checksum
+    vault address. One `screen_lending` call is shared across all chains/phases within
+    the TTL. Returns {} (graceful) when Delta Lab is unavailable — the caller then
+    contributes no Euler rows rather than falling back to the ~1250-call enumeration."""
+    async with _euler_discovery_lock:
+        if time.time() - float(_euler_discovery_cache["ts"]) > _EULER_DISCOVERY_TTL_S:
+            by_chain: dict[int, dict[str, dict[str, Any]]] = {}
+            try:
+                resp = await DELTA_LAB_CLIENT.screen_lending(basis="USD", limit=500)
+                data = resp.get("data") if isinstance(resp, dict) else resp
+                for r in data or []:
+                    if not str(r.get("venue_name") or "").lower().startswith("euler"):
+                        continue
+                    ext = str(r.get("market_external_id") or "")
+                    if not (ext.startswith("0x") and len(ext) == 42):
+                        continue
+                    cid = int(r.get("chain_id") or 0)
+                    tvl = r.get("supply_tvl_usd")
+                    vault_cs = to_checksum_address(ext)
+                    by_chain.setdefault(cid, {})[vault_cs] = {
+                        "vault": vault_cs,
+                        "apy": float(r.get("net_supply_apr_now") or 0.0),
+                        "symbol": str(r.get("symbol") or ""),
+                        "is_frozen": bool(r.get("is_frozen")),
+                        "is_paused": bool(r.get("is_paused")),
+                        "tvl_usd": float(tvl) if tvl is not None else None,
+                    }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"euler Delta Lab discovery failed: {exc}")
+                by_chain = {}
+            _euler_discovery_cache["by_chain"] = by_chain
+            _euler_discovery_cache["ts"] = time.time()
+    found = _euler_discovery_cache["by_chain"].get(chain_id, {})
+    return {meta["vault"]: meta for meta in found.values() if _matches_asset(meta["symbol"], allowed)}
+
+
 async def _scan_euler_v2(adapter: EulerV2Adapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
-    ok, markets = await adapter.get_all_markets(chain_id=chain_id, perspective="governed", concurrency=8)
-    if not ok:
-        raise RuntimeError(f"euler_v2 get_all_markets failed on chain {chain_id}: {markets}")
-    rows: list[VenueRow] = []
-    for m in markets:
-        if not _matches_asset(m.get("asset_symbol"), allowed):
-            continue
-        cash = int(m.get("cash") or 0)
-        total_borrowed = int(m.get("total_borrowed") or m.get("total_borrows") or 0)
+    discovered = await _euler_stable_vaults(chain_id, allowed)
+    if not discovered:
+        return []
+
+    async def _row(vault: str, meta: dict[str, Any]) -> VenueRow | None:
+        ok, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
+        if not ok or not isinstance(info, dict):
+            logger.warning(f"euler get_vault_info_full failed for {vault} on chain {chain_id}: {info}")
+            return None
+        if not _matches_asset(info.get("assetSymbol"), allowed):
+            return None
+        cash = int(info.get("totalCash") or 0)
+        total_borrowed = int(info.get("totalBorrowed") or 0)
         total = cash + total_borrowed
         utilization = (total_borrowed / total) if total else 0.0
-        decimals = int(m.get("asset_decimals") or 6)
-        tvl_usd = total / (10**decimals)
-        rows.append(VenueRow(
+        decimals = int(info.get("assetDecimals") or 6)
+        return VenueRow(
             venue="euler_v2",
             chain_id=chain_id,
-            asset_symbol=_asset_symbol(m.get("asset_symbol")),
-            asset_address=str(m.get("asset") or m.get("underlying") or ""),
-            market_id=str(m.get("vault")),
+            asset_symbol=_asset_symbol(info.get("assetSymbol")),
+            asset_address=str(info.get("asset") or ""),
+            market_id=vault,
             decimals=decimals,
-            supply_apy=float(m.get("supply_apy") or 0.0),
+            supply_apy=float(meta.get("apy") or 0.0),  # on-chain getVaultInfoFull has no APY; use Delta Lab's
             utilization=utilization,
             supply_cap_headroom_raw=cash or None,
-            tvl_usd=tvl_usd,
-            extra={"vault": m.get("vault")},
-        ))
-    return rows
+            tvl_usd=(total / (10**decimals)) if total else meta.get("tvl_usd"),
+            is_frozen=bool(meta.get("is_frozen")),
+            is_paused=bool(meta.get("is_paused")),
+            extra={"vault": vault},
+        )
+
+    rows = await asyncio.gather(*[_row(v, m) for v, m in discovered.items()])
+    return [r for r in rows if r is not None]
 
 
 async def _euler_positions(adapter: EulerV2Adapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
-    ok_markets, markets_payload = await adapter.get_all_markets(chain_id=chain_id, perspective="governed", concurrency=8)
-    if not ok_markets:
-        raise RuntimeError(f"euler_v2 markets failed on chain {chain_id}: {markets_payload}")
-    market_by_vault: dict[str, dict[str, Any]] = {}
-    for market in markets_payload:
-        if not _matches_asset(market.get("asset_symbol"), allowed):
-            continue
-        vault = str(market.get("vault") or "").lower()
-        if vault:
-            market_by_vault[vault] = market
-
     ok, state = await adapter.get_full_user_state(chain_id=chain_id, account=account, include_zero_positions=False)
     if not ok:
         raise RuntimeError(f"euler_v2 user state failed on chain {chain_id}: {state}")
+    discovered = await _euler_stable_vaults(chain_id, allowed)
     positions: list[Position] = []
     seen_vaults: set[str] = set()
-    for p in state.get("positions") or []:
-        vault = str(p.get("vault") or "").lower()
-        market = market_by_vault.get(vault)
-        if market is None:
-            continue
-        supply_raw = int(p.get("assets") or 0)
-        if supply_raw <= 0:
-            continue
-        seen_vaults.add(vault)
-        positions.append(Position(
-            venue="euler_v2",
-            chain_id=chain_id,
-            asset_symbol=_asset_symbol(market.get("asset_symbol")),
-            asset_address=str(market.get("asset") or market.get("underlying") or p.get("asset") or p.get("underlying") or ""),
-            market_id=str(market.get("vault") or p.get("vault") or ""),
-            decimals=int(market.get("asset_decimals") or 6),
-            supply_raw=supply_raw,
-            supply_usd=None,
-        ))
 
-    # AccountLens only reports EVC-enabled vaults. Plain supply-only eVault deposits
-    # can hold shares without being enabled as collateral/controller, so scan the
-    # verified stable vault share balances as a fallback.
+    async def _held_position(vault: str, underlying: str, supply_raw: int) -> Position | None:
+        meta = discovered.get(vault)  # user-state and discovery are both checksummed
+        if meta is not None:
+            symbol = _asset_symbol(meta["symbol"])
+            decimals = 18 if symbol in STABLE_DECIMALS_18 else 6
+        else:
+            # Held a vault Delta Lab didn't list — read it to classify (rare).
+            ok_i, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
+            if not ok_i or not isinstance(info, dict) or not _matches_asset(info.get("assetSymbol"), allowed):
+                return None
+            symbol = _asset_symbol(info.get("assetSymbol"))
+            decimals = int(info.get("assetDecimals") or 6)
+            underlying = underlying or str(info.get("asset") or "")
+        seen_vaults.add(vault.lower())
+        return Position(
+            venue="euler_v2", chain_id=chain_id, asset_symbol=symbol,
+            asset_address=underlying, market_id=vault, decimals=decimals,
+            supply_raw=supply_raw, supply_usd=None,
+        )
+
+    held = [
+        (str(p.get("vault") or ""), str(p.get("underlying") or ""), int(p.get("assets") or 0))
+        for p in (state.get("positions") or [])
+    ]
+    held_rows = await asyncio.gather(*[
+        _held_position(v, u, s) for v, u, s in held if v and s > 0
+    ])
+    positions.extend(p for p in held_rows if p is not None)
+
+    # AccountLens only reports EVC-enabled vaults. Plain supply-only deposits hold
+    # shares without being enabled, so share-scan the discovered stable vaults too.
     async with web3_from_chain_id(chain_id) as web3:
         acct = web3.to_checksum_address(account)
-        sem = asyncio.Semaphore(12)
 
-        async def _share_position(vault_key: str, market: dict[str, Any]) -> Position | None:
-            if vault_key in seen_vaults:
+        async def _share_position(vault: str, meta: dict[str, Any]) -> Position | None:
+            if vault.lower() in seen_vaults:
                 return None
-            vault_addr = web3.to_checksum_address(str(market.get("vault")))
-            contract = web3.eth.contract(address=vault_addr, abi=ERC4626_ABI)
+            contract = web3.eth.contract(address=web3.to_checksum_address(vault), abi=ERC4626_ABI)
+            shares = int(await contract.functions.balanceOf(acct).call(block_identifier="latest") or 0)
+            if shares <= 0:
+                return None
+            assets = int(await contract.functions.convertToAssets(shares).call(block_identifier="latest") or 0)
+            if assets <= 0:
+                return None
+            symbol = _asset_symbol(meta["symbol"])
+            decimals = 18 if symbol in STABLE_DECIMALS_18 else 6
+            ok_i, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
+            underlying = str(info.get("asset") or "") if (ok_i and isinstance(info, dict)) else ""
+            return Position(
+                venue="euler_v2", chain_id=chain_id, asset_symbol=symbol,
+                asset_address=underlying, market_id=vault, decimals=decimals,
+                supply_raw=assets, supply_usd=assets / (10**decimals),
+            )
 
-            async with sem:
-                shares = int(await contract.functions.balanceOf(acct).call(block_identifier="latest") or 0)
-                if shares <= 0:
-                    return None
-                assets = int(await contract.functions.convertToAssets(shares).call(block_identifier="latest") or 0)
-                if assets <= 0:
-                    return None
-                decimals = int(market.get("asset_decimals") or 6)
-                return Position(
-                    venue="euler_v2",
-                    chain_id=chain_id,
-                    asset_symbol=_asset_symbol(market.get("asset_symbol")),
-                    asset_address=str(market.get("asset") or market.get("underlying") or ""),
-                    market_id=str(market.get("vault") or ""),
-                    decimals=decimals,
-                    supply_raw=assets,
-                    supply_usd=assets / (10**decimals),
-                )
-
-        fallback_positions = await asyncio.gather(
-            *[_share_position(vault_key, market) for vault_key, market in market_by_vault.items()]
-        )
-        positions.extend(p for p in fallback_positions if p is not None)
+        fallback = await asyncio.gather(*[_share_position(v, m) for v, m in discovered.items()])
+    positions.extend(p for p in fallback if p is not None)
     return positions
 
 
