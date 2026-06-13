@@ -1,0 +1,155 @@
+version: 1
+use_cases:
+  stablecoin-lending:
+    label: Stablecoin Lending
+    description: Compare deposit opportunities for stable assets across lending markets and vaults.
+    row_taxonomy:
+    - id: supply_rate
+      label: Supply APY
+      description: Base supply return before rewards and unknown fees.
+      preferred_fields:
+      - supply_apy
+      - deposit_apy
+      - base_apy
+      - gross_apy
+      method_patterns:
+      - get_all_markets
+      - get_all_vaults
+      - get_apy
+      required: true
+    - id: net_rate
+      label: Net APY
+      description: Supply return after known fees.
+      preferred_fields:
+      - net_supply_apy
+      - net_apy
+      required: false
+    - id: rewards
+      label: Rewards
+      description: External reward tokens and reward APY if exposed by the adapter.
+      preferred_fields:
+      - reward_apy
+      - rewards
+      - reward_tokens
+      required: false
+    - id: liquidity
+      label: Liquidity
+      description: Available market or vault liquidity and total value locked.
+      preferred_fields:
+      - liquidity
+      - total_supply
+      - tvl
+      - total_assets
+      required: false
+    - id: constraints
+      label: Constraints
+      description: Chain support, market ids, collateral constraints, and deposit caveats.
+      preferred_fields:
+      - chain_id
+      - market_id
+      - collateral_token
+      - loan_token
+      required: false
+  lp:
+    label: Liquidity Providing
+    description: Compare liquidity pools, routing depth, volume, fees, and volatility exposure.
+    row_taxonomy:
+    - id: fees
+      label: Fees
+      preferred_fields:
+      - fee_apr
+      - fees_apy
+      - lp_fee
+      method_patterns:
+      - get_pools
+      - get_pool
+      - search_pools
+      required: true
+    - id: volume
+      label: Volume
+      preferred_fields:
+      - volume_24h
+      - daily_volume
+      required: false
+    - id: liquidity
+      label: Liquidity
+      preferred_fields:
+      - tvl
+      - liquidity
+      required: false
+    - id: composition
+      label: Pool Composition
+      preferred_fields:
+      - tokens
+      - token0
+      - token1
+      required: false
+  perps:
+    label: Perpetuals
+    description: Compare perpetual markets using funding, open interest, spread, and liquidity data.
+    row_taxonomy:
+    - id: funding
+      label: Funding
+      preferred_fields:
+      - funding_rate
+      - funding_apy
+      method_patterns:
+      - get_meta_and_asset_ctxs
+      - get_funding_history
+      - get_market
+      required: true
+    - id: open_interest
+      label: Open Interest
+      preferred_fields:
+      - open_interest
+      - oi
+      required: false
+    - id: liquidity
+      label: Liquidity
+      preferred_fields:
+      - mark_price
+      - mid_price
+      - book
+      required: false
+    - id: constraints
+      label: Constraints
+      preferred_fields:
+      - min_order_size
+      - leverage
+      - margin
+      required: false
+  restaking:
+    label: Restaking
+    description: Compare restaking and liquid restaking venues by yield, liquidity, lockups, and slashing exposure.
+    row_taxonomy:
+    - id: yield
+      label: Yield
+      preferred_fields:
+      - apy
+      - apr
+      - rewards_apy
+      method_patterns:
+      - get_vaults
+      - get_positions
+      - get_markets
+      required: true
+    - id: liquidity
+      label: Liquidity
+      preferred_fields:
+      - tvl
+      - liquidity
+      required: false
+    - id: lockups
+      label: Lockups
+      preferred_fields:
+      - lockup
+      - withdrawal_delay
+      - cooldown
+      required: false
+    - id: risks
+      label: Risks
+      preferred_fields:
+      - slashing
+      - operator
+      - risk
+      required: false

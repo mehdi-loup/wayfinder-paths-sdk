@@ -1,0 +1,16 @@
+action: how-it-works
+args:
+  adapter: aave_v3_adapter
+  docs_mode: metadata
+  metrics_mode: off
+expect:
+  primary_artifact: infographic.html
+  files:
+  - adapter_inventory.json
+  - data_snapshot.json
+  - design_spec.json
+  - infographic.html
+  - infographic.svg
+  - alt_text.md
+  - validation.json
+  validation_ok: true

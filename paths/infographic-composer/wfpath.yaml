@@ -1,0 +1,50 @@
+schema_version: '0.1'
+slug: infographic-composer
+name: Infographic Composer
+version: 0.1.0
+summary: Build read-only protocol infographics from adapter manifests, checked-in
+  mechanism profiles, adapter risk catalogs, official docs references, and best-effort
+  live adapter reads.
+primary_kind: dashboard
+tags:
+- dashboard
+- infographic
+- adapters
+- protocols
+- read-only
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+skill:
+  enabled: true
+  source: generated
+  name: infographic-composer
+  description: Create static HTML/SVG protocol infographics for how-it-works, stablecoin
+    rates, market snapshots, and protocol comparisons using read-only adapter data
+    and checked-in protocol mechanism profiles.
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    request:
+      type: yaml
+      path: inputs/request.yaml
+      required: false
+      description: Default request values for infographic generation.
+    style:
+      type: yaml
+      path: inputs/style.yaml
+      required: false
+      description: Visual tokens, rendering defaults, and accessibility constraints.

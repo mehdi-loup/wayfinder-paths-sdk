@@ -1,0 +1,8 @@
+action: market-snapshot
+args:
+  adapter: hyperliquid_adapter
+  market: BTC
+expect:
+  primary_artifact: infographic.html
+  validation_ok: true
+  risk_catalog_required: true

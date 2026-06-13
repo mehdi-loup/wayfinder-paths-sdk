@@ -1,0 +1,12 @@
+action: stablecoin-rates
+args:
+  asset: USDC
+  chain: base
+expect:
+  apy_normalization_version: apy-normalization-v1
+  primary_artifact: infographic.html
+  validation_ok: true
+  verified_adapters:
+  - aave_v3_adapter
+  - morpho_adapter
+  - moonwell_adapter

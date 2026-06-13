@@ -1,0 +1,184 @@
+version: 1
+adapters:
+  aave_v3_adapter:
+    protocol: Aave V3
+    checked_at: '2026-05-13'
+    risks:
+    - Smart contract and governance parameter risk.
+    - Variable utilization can change supply APY materially.
+    - Rewards, when present, may be paid in non-stable tokens.
+  morpho_adapter:
+    protocol: Morpho
+    checked_at: '2026-05-13'
+    risks:
+    - Isolated market risk depends on oracle, collateral, and liquidation configuration.
+    - Vault APY can include curator allocation choices.
+    - Reward APY may be token-denominated and volatile.
+  moonwell_adapter:
+    protocol: Moonwell
+    checked_at: '2026-05-13'
+    risks:
+    - Market utilization can move supply APY quickly.
+    - Chain-specific liquidity can constrain large deposits or exits.
+    - Rewards, when present, may be paid in volatile tokens.
+  hyperliquid_adapter:
+    protocol: Hyperliquid
+    checked_at: '2026-05-13'
+    risks:
+    - Perpetual markets carry liquidation, funding, and leverage risk.
+    - Funding rates can change sign and magnitude quickly.
+    - Off-chain market infrastructure cannot be simulated by EVM fork tools.
+  pendle_adapter:
+    protocol: Pendle
+    checked_at: '2026-05-13'
+    risks:
+    - Fixed-yield markets depend on maturity, liquidity, and underlying protocol risk.
+    - PT/YT prices can move with implied yield and liquidity conditions.
+    - Some markets may be chain-specific or have limited depth.
+  pool_adapter:
+    protocol: Pool Adapter
+    checked_at: '2026-05-13'
+    risks:
+    - Aggregated pool analytics depend on source freshness.
+    - LP returns can be offset by price divergence and fee volatility.
+    - Pool availability and chain support can change.
+  aerodrome_adapter:
+    protocol: Aerodrome
+    checked_at: '2026-05-13'
+    risks:
+    - LP exposure includes token price divergence and incentive volatility.
+    - Pool depth can vary materially across token pairs.
+    - Rewards may be denominated in volatile tokens.
+  aerodrome_slipstream_adapter:
+    protocol: Aerodrome Slipstream
+    checked_at: '2026-05-13'
+    risks:
+    - Concentrated liquidity positions can go out of range.
+    - Fee estimates depend on current volume and range selection.
+    - Incentives may be volatile and chain-specific.
+  uniswap_adapter:
+    protocol: Uniswap
+    checked_at: '2026-05-13'
+    risks:
+    - Concentrated liquidity positions can go out of range.
+    - Fee APR depends on pool volume and position range.
+    - LP exposure includes price divergence risk.
+  euler_v2_adapter:
+    protocol: Euler V2
+    checked_at: '2026-05-13'
+    risks:
+    - Vault and market risk depends on collateral, oracle, and liquidation settings.
+    - Supply returns can change with utilization.
+    - Chain-specific markets can have limited exit liquidity.
+  sparklend_adapter:
+    protocol: SparkLend
+    checked_at: '2026-05-13'
+    risks:
+    - Lending market rates can change with utilization.
+    - Governance and risk parameter changes can affect deposits.
+    - Rewards and incentives may change or expire.
+  hyperlend_adapter:
+    protocol: HyperLend
+    checked_at: '2026-05-13'
+    risks:
+    - Lending market rates can move with utilization.
+    - Chain and market liquidity can constrain exits.
+    - Rewards may be volatile or short-lived.
+  ethena_vault_adapter:
+    protocol: Ethena Vault
+    checked_at: '2026-05-13'
+    risks:
+    - Yield depends on strategy, hedging, and market conditions.
+    - Redemptions may be subject to protocol constraints.
+    - Reward or points programs may not equal realized yield.
+  etherfi_adapter:
+    protocol: Ether.fi
+    checked_at: '2026-05-13'
+    risks:
+    - Liquid restaking yield can vary with validator and restaking conditions.
+    - Withdrawal timing and liquidity can vary by asset.
+    - Slashing and operator risk may apply.
+  lido_adapter:
+    protocol: Lido
+    checked_at: '2026-05-13'
+    risks:
+    - Staking yield can vary with validator performance and network conditions.
+    - Liquid staking token price can deviate from underlying value.
+    - Withdrawal queues can delay exits.
+  eigencloud_adapter:
+    protocol: EigenCloud
+    checked_at: '2026-05-13'
+    risks:
+    - Restaking exposure can include operator and slashing risk.
+    - Reward terms may change and can be difficult to annualize.
+    - Withdrawal and delegation constraints can affect liquidity.
+  polymarket_adapter:
+    protocol: Polymarket
+    checked_at: '2026-05-13'
+    risks:
+    - Prediction market prices reflect market consensus, not guaranteed probabilities.
+    - Liquidity and spread can vary by market outcome.
+    - Resolution terms and oracle processes can affect settlement.
+  projectx_adapter:
+    protocol: ProjectX
+    checked_at: '2026-05-13'
+    risks:
+    - Market data may depend on venue-specific APIs and liquidity.
+    - Execution or settlement constraints can vary by market.
+    - Adapter support should be verified before using live output.
+  brap_adapter:
+    protocol: BRAP
+    checked_at: '2026-05-13'
+    risks:
+    - Route quotes can change before execution.
+    - Bridge and swap routes can include slippage, fees, and settlement delay.
+    - This path only uses read-only quote metadata when available.
+  boros_adapter:
+    protocol: Boros
+    checked_at: '2026-05-13'
+    risks:
+    - Yield derivative markets can move sharply with rate expectations.
+    - Liquidity and maturity constraints can affect exits.
+    - Product terms should be verified before execution.
+  token_adapter:
+    protocol: Token Adapter
+    checked_at: '2026-05-13'
+    risks:
+    - Token metadata and prices depend on upstream data freshness.
+    - Price snapshots may not represent executable quotes.
+    - Spam or unsupported tokens can be filtered or missing.
+  balance_adapter:
+    protocol: Balance Adapter
+    checked_at: '2026-05-13'
+    risks:
+    - Balance data is observational and depends on chain indexing/RPC availability.
+    - USD values depend on price source freshness.
+    - Dust, spam, or unsupported tokens may be omitted.
+  ledger_adapter:
+    protocol: Ledger Adapter
+    checked_at: '2026-05-13'
+    risks:
+    - Ledger data reflects recorded activity, not necessarily complete external history.
+    - Classification depends on available transaction metadata.
+    - Historical pricing can be approximate if source data is incomplete.
+  ccxt_adapter:
+    protocol: CCXT
+    checked_at: '2026-05-13'
+    risks:
+    - Exchange market data depends on venue API availability.
+    - Centralized exchange balances and positions carry counterparty risk.
+    - Symbols and market ids can differ by exchange.
+  multicall_adapter:
+    protocol: Multicall
+    checked_at: '2026-05-13'
+    risks:
+    - Batched reads depend on RPC and contract availability.
+    - Returned values require correct ABI and block context.
+    - Failed calls can produce partial snapshots.
+  avantis_adapter:
+    protocol: Avantis
+    checked_at: '2026-05-13'
+    risks:
+    - Perp and trading products carry liquidation and funding risk.
+    - Liquidity, spreads, and market parameters can change quickly.
+    - Adapter support should be verified before using live output.
