@@ -1,0 +1,22 @@
+wallet: main
+
+# Chains
+chain_eth: 1      # Ethereum mainnet — register / renew / transfer / set-records
+chain_base: 8453  # Base — set-primary / create-subname (also works on OP/Arb via same L2 reverse registrar)
+
+# ENS contracts (Ethereum mainnet)
+contracts:
+  ens_registry:                "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"
+  eth_registrar_controller:    "0x253553366Da8546fC250F225fe3d25d0C782303b"  # wrapped controller (current)
+  base_registrar:              "0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85"
+  name_wrapper:                "0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401"
+  public_resolver:             "0xF29100983E058B709F3D539b0c765937B804AC15"
+
+# L2 contracts — same address on Base, Optimism, Arbitrum One, Linea, Scroll
+l2_contracts:
+  reverse_registrar: "0x0000000000D8e504002cC26E3Ec46D81971C1664"
+
+# Registration defaults
+defaults:
+  duration_years: 1
+  commit_wait_seconds: 70  # ENS requires min 60s between commit and register

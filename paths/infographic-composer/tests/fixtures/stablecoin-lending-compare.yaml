@@ -1,0 +1,14 @@
+action: compare-protocols
+args:
+  adapters:
+  - aave_v3_adapter
+  - morpho_adapter
+  - moonwell_adapter
+  use_case: stablecoin-lending
+  asset: USDC
+  chain: base
+expect:
+  primary_artifact: infographic.html
+  validation_ok: true
+  use_case: stablecoin-lending
+  row_taxonomy_required: true

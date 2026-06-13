@@ -1,0 +1,16 @@
+wallet: main
+gas_reserve_native_eth: 0.005
+slippage_bps: 30
+default_strategy:
+  range_strategy: static_pct          # static_pct | atr_band | vol_scaled
+  range_width_pct: 5                  # used by static_pct
+  range_width_atr: 1.5                # used by atr_band / vol_scaled
+  rebalance_threshold_pct: 5          # rebalance when price exits band by this %
+  rebalance_cooldown_minutes: 60
+  max_rebalances_per_day: 4
+  fee_compound: true
+  compound_threshold_usd: 10
+monitor:
+  poll_interval_seconds: 300
+  max_runtime_hours: 168
+ledger_record: true
