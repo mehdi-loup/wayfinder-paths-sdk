@@ -1058,7 +1058,7 @@ async def test_deposit_rejects_unsupported_asset():
 # auto-rotate (unattended runner action)
 # ---------------------------------------------------------------------------
 
-def _ok_update_result():
+def _ok_update_result(deposit_amount: int = 1_000 * 10**6, gas_topup_usd: float = 0.0):
     return {
         "action": "update",
         "status": "ok",
@@ -1068,10 +1068,12 @@ def _ok_update_result():
                 "from": "aave_v3@8453",
                 "to": "morpho_blue_market@8453",
                 "human_amount": 1000.0,
+                "decimals": 6,
                 "apy_delta_bps": 120,
                 "estimated_uplift_usd_30d": 9.86,
+                "gas_topup_usd": gas_topup_usd,
             },
-            "receipts": [{"status": 1}],
+            "receipts": {"deposit": {"hash": "0xDEP"}, "deposit_amount": deposit_amount},
         }],
         "gas_check": {"insufficient": []},
     }
@@ -1781,3 +1783,29 @@ async def test_moonwell_positions_batched_no_get_pos():
     assert positions[0].asset_symbol == "USDC"
     assert positions[0].market_id == "0x" + "c" * 40
     assert positions[0].supply_raw == 400  # 200 * 2e18 // 1e18
+
+
+def test_leg_summary_reports_actual_deposited_not_planned():
+    # Top-up leg: planned 1000, but only 985 reached the venue after the gas slice.
+    entry = {
+        "leg": {
+            "asset_symbol": "USDC", "from": "aave_v3@42161", "to": "hyperlend@999",
+            "human_amount": 1000.0, "decimals": 6, "apy_delta_bps": 150,
+            "estimated_uplift_usd_30d": 12.3, "gas_topup_usd": 15.0,
+        },
+        "receipts": {"deposit_amount": 985 * 10**6},
+    }
+    line = rotator._leg_summary_line(entry)
+    assert "985.00 deposited" in line          # actual, not the planned 1,000
+    assert "1,000.00:" not in line
+    assert "gas top-up" in line
+
+
+def test_leg_summary_falls_back_to_planned_without_receipt():
+    entry = {"leg": {
+        "asset_symbol": "USDC", "from": "aave_v3@8453", "to": "morpho_blue_market@8453",
+        "human_amount": 1000.0, "decimals": 6, "apy_delta_bps": 120,
+        "estimated_uplift_usd_30d": 9.86,
+    }}  # errored leg: no receipts
+    line = rotator._leg_summary_line(entry)
+    assert "1,000.00:" in line

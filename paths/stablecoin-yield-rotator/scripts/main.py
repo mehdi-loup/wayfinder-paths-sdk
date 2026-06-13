@@ -1272,12 +1272,22 @@ async def action_update(
 AUTO_ROTATE_STATE = "auto_rotate"
 
 
-def _leg_summary_line(leg: dict[str, Any]) -> str:
+def _leg_summary_line(entry: dict[str, Any]) -> str:
+    """Summarize one executed leg, reporting the amount that actually reached the target
+    venue (`receipts["deposit_amount"]`) — which is below the planned size on gas-top-up
+    and reduced-redemption legs — falling back to the planned size when no receipt exists."""
+    leg = entry["leg"]
+    receipts = entry.get("receipts") if isinstance(entry.get("receipts"), dict) else {}
     src = leg.get("from") or "wallet"
     topup_usd = float(leg.get("gas_topup_usd") or 0.0)
     topup_note = f", incl. ~${topup_usd:,.2f} gas top-up" if topup_usd > 0 else ""
+    deposited_raw = receipts.get("deposit_amount")
+    if deposited_raw is not None:
+        amount = f"{int(deposited_raw) / (10 ** int(leg.get('decimals') or 6)):,.2f} deposited"
+    else:
+        amount = f"{leg['human_amount']:,.2f}"
     return (
-        f"- {leg['asset_symbol']} {leg['human_amount']:,.2f}: {src} → {leg['to']} "
+        f"- {leg['asset_symbol']} {amount}: {src} → {leg['to']} "
         f"(+{leg['apy_delta_bps']} bps, est. +${leg['estimated_uplift_usd_30d']:,.2f}/30d{topup_note})"
     )
 
@@ -1299,7 +1309,7 @@ def _auto_rotate_notification(result: dict[str, Any]) -> tuple[str, str] | None:
     status = result.get("status")
     if status == "ok":
         executed = result.get("executed") or []
-        lines = [_leg_summary_line(e["leg"]) for e in executed]
+        lines = [_leg_summary_line(e) for e in executed]
         lines.extend(_gas_skip_lines(result))
         return (
             f"Stable rotator: executed {len(executed)} rotation leg(s)",
@@ -1310,7 +1320,7 @@ def _auto_rotate_notification(result: dict[str, Any]) -> tuple[str, str] | None:
         lines = [f"**Reason:** {result.get('reason')}"]
         if executed:
             lines.append(f"\nExecuted before halt ({len(executed)} leg(s)):")
-            lines.extend(_leg_summary_line(e["leg"]) for e in executed)
+            lines.extend(_leg_summary_line(e) for e in executed)
         lines.extend(_gas_skip_lines(result))
         return ("Stable rotator: rotation halted", "\n".join(lines))
     return None
