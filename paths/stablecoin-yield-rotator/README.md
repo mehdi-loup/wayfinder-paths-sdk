@@ -36,6 +36,7 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 - Gas balance check on every chain in the rotation path.
 - Gas-starved **destination** chains get a planned top-up leg: a small slice of the rotating stable is bridged into native gas first, and the top-up's full cost is added to the rotation's cost in the payback/max-gas gates — a rotation that can't amortize its own gas funding is skipped. Gas-starved **source** chains can't be fixed automatically (no gas to sign with) and are surfaced as skipped legs with a fund-gas reason.
 - Scan data is cached for 15 minutes; wallet positions are always refreshed before quote/update, and target venues are re-checked live before fund-moving execution.
+- All reads go through the rate-limited Wayfinder RPC proxy. To avoid 429s, the plan build bounds concurrent reads (`rpc_concurrency`, default 4) with one shared limiter across scan + positions + balance reads, and retries transient 429/rate-limit errors with backoff. Lower `rpc_concurrency` if you still hit limits.
 
 ## Scheduled auto-rotation
 

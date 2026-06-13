@@ -16,3 +16,6 @@ constraints:
   blocklist_markets: []
 slippage_bps: 30
 ledger_record: true
+# Max concurrent reads through the Wayfinder RPC proxy (rate-limited per API key).
+# Reads also retry 429s with backoff; lower this if you still see rate-limit errors.
+rpc_concurrency: 4

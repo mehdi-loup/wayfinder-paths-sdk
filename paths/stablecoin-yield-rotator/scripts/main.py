@@ -43,12 +43,14 @@ from rotation import (  # noqa: E402
 )
 from venues import (  # noqa: E402
     ALLOWED_STABLES,
+    DEFAULT_RPC_CONCURRENCY,
     EXECUTABLE_VENUES,
     STABLE_DECIMALS_18,
     Position,
     VenueRow,
     lend,
     positions_all,
+    run_bounded,
     scan_all,
     unlend,
 )
@@ -100,6 +102,11 @@ def _decimals_for(asset: str) -> int:
 
 def _to_raw(asset: str, human: float) -> int:
     return int(round(human * (10 ** _decimals_for(asset))))
+
+
+def _rpc_concurrency(config: dict[str, Any]) -> int:
+    # Max concurrent reads through the rate-limited Wayfinder RPC proxy. Lower if 429s persist.
+    return max(1, int(config.get("rpc_concurrency", DEFAULT_RPC_CONCURRENCY)))
 
 
 async def _resolve_wallet_label(config: dict[str, Any]) -> str:
@@ -171,6 +178,7 @@ async def _scan_all_cached(
     *,
     strict: bool = True,
     failure_log: list[dict[str, Any]] | None = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[VenueRow]:
     path = _scan_cache_path(config, strict=strict)
     now = time.time()
@@ -195,6 +203,8 @@ async def _scan_all_cached(
         assets=list(config.get("assets") or []),
         strict=strict,
         failure_log=failures,
+        concurrency=_rpc_concurrency(config),
+        semaphore=semaphore,
     )
     if failure_log is not None:
         failure_log.extend(failures)
@@ -824,7 +834,8 @@ TOPUP_FALLBACK_USD = 15.0
 
 
 async def _gas_topup_state(
-    chains: list[int], address: str, min_gas_wei: int
+    chains: list[int], address: str, min_gas_wei: int,
+    *, semaphore: asyncio.Semaphore | None = None,
 ) -> dict[str, Any]:
     """Native gas balances per chain plus top-up estimates for starved chains.
 
@@ -834,9 +845,11 @@ async def _gas_topup_state(
     gas guard catches it; failing to price a native token falls back to a flat
     conservative cost so the rotation decision stays gas-aware.
     """
+    sem = semaphore or asyncio.Semaphore(DEFAULT_RPC_CONCURRENCY)
+
     async def _bal(chain_id: int) -> int | None:
         try:
-            return await _gas_balance_wei(chain_id, address)
+            return await run_bounded(sem, lambda: _gas_balance_wei(chain_id, address))
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"gas balance read failed for chain {chain_id}: {exc}")
             return None
@@ -874,7 +887,8 @@ async def _gas_topup_state(
 
 
 async def _idle_wallet_positions(
-    scan: list[VenueRow], address: str
+    scan: list[VenueRow], address: str,
+    *, semaphore: asyncio.Semaphore | None = None,
 ) -> list[Position]:
     """Idle configured-stable balances in the wallet, as pseudo-positions earning 0%.
 
@@ -882,6 +896,7 @@ async def _idle_wallet_positions(
     one scanned venue are swept. Per-token read failures are logged and skipped —
     a flaky RPC must not block planning for real positions.
     """
+    sem = semaphore or asyncio.Semaphore(DEFAULT_RPC_CONCURRENCY)
     zero_addresses = {"", "none", "0x0000000000000000000000000000000000000000"}
     by_key: dict[tuple[str, int], VenueRow] = {}
     for row in scan:
@@ -891,9 +906,9 @@ async def _idle_wallet_positions(
 
     async def _position(asset: str, chain_id: int, row: VenueRow) -> Position | None:
         try:
-            balance = await get_token_balance(
+            balance = await run_bounded(sem, lambda: get_token_balance(
                 token_address=row.asset_address, chain_id=chain_id, wallet_address=address,
-            )
+            ))
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"idle balance read failed for {asset}@{chain_id}: {exc}")
             return None
@@ -919,22 +934,27 @@ async def _idle_wallet_positions(
 async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[RotationPlan, list[VenueRow], list[Position]]:
     constraints = config.get("constraints") or {}
     slippage_bps = int(config.get("slippage_bps", 30))
+    # One semaphore shared across scan + positions + balance reads bounds total
+    # in-flight requests to the rate-limited RPC proxy for the whole plan build.
+    rpc_sem = asyncio.Semaphore(_rpc_concurrency(config))
     scan, positions = await asyncio.gather(
-        _scan_all_cached(config),
+        _scan_all_cached(config, semaphore=rpc_sem),
         positions_all(
             venues=list(config.get("venues") or []),
             chains=[int(c) for c in (config.get("chains") or [])],
             assets=list(config.get("assets") or []),
             account=address,
+            semaphore=rpc_sem,
         ),
     )
-    positions = positions + await _idle_wallet_positions(scan, address)
+    positions = positions + await _idle_wallet_positions(scan, address, semaphore=rpc_sem)
 
     min_gas_wei = int(config.get("min_gas_wei", DEFAULT_MIN_GAS_WEI))
     gas_state = await _gas_topup_state(
         chains=[int(c) for c in (config.get("chains") or [])],
         address=address,
         min_gas_wei=min_gas_wei,
+        semaphore=rpc_sem,
     )
 
     plan = quote_rotation(
