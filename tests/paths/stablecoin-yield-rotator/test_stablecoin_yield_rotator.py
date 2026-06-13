@@ -87,6 +87,21 @@ def funded_gas():
         yield
 
 
+@pytest.fixture(autouse=True)
+def block_external_reads():
+    """Keep the per-chain balance multicall and the Euler/Delta Lab discovery off the
+    network by default; tests that exercise them override these patches. Also resets
+    the Euler discovery memo so each test re-discovers against its own mock."""
+    import venues as _venues  # noqa: PLC0415
+    _venues._euler_discovery_cache["ts"] = 0.0
+    _venues._euler_discovery_cache["by_chain"] = {}
+    with (
+        patch("main._fetch_chain_balances", AsyncMock(return_value={})),
+        patch.object(_venues.DELTA_LAB_CLIENT, "screen_lending", AsyncMock(return_value={"data": []})),
+    ):
+        yield
+
+
 async def test_scan_returns_ranked_table(fake_signing_callback):
     rows = [
         _make_row("aave_v3", USDC_ADDRESS, 0.040),
@@ -210,27 +225,57 @@ async def test_quote_rotation_reuses_wallet_agnostic_scan_cache(fake_signing_cal
     assert fake_positions_all.await_count == 2
 
 
-async def test_euler_scan_uses_underlying_and_total_borrows_keys():
+async def test_euler_scan_discovers_via_delta_lab_then_reads_only_those_vaults():
     from venues import _scan_euler_v2  # noqa: PLC0415
 
+    vault = "0x797dd80692c3b2dAdaBCe8e30C07fDE5307D48a9"
+    # Delta Lab discovery returns the one stable Euler vault (apy from Delta Lab).
+    discovered = {vault: {"vault": vault, "apy": 0.05, "symbol": "USDC",
+                          "is_frozen": False, "is_paused": False, "tvl_usd": 1_000_000.0}}
+
     adapter = AsyncMock()
-    adapter.get_all_markets = AsyncMock(return_value=(True, [{
-        "asset_symbol": "USDC",
-        "underlying": USDC_ADDRESS,
-        "vault": "0xVAULT",
-        "asset_decimals": 6,
-        "supply_apy": 0.05,
-        "cash": 25,
-        "total_borrows": 75,
-    }]))
+    adapter.get_vault_info_full = AsyncMock(return_value=(True, {
+        "assetSymbol": "USDC", "asset": USDC_ADDRESS, "assetDecimals": 6,
+        "totalCash": 25, "totalBorrowed": 75,
+    }))
 
-    rows = await _scan_euler_v2(adapter, chain_id=8453, allowed={"USDC"})
+    with patch("venues._euler_stable_vaults", AsyncMock(return_value=discovered)):
+        rows = await _scan_euler_v2(adapter, chain_id=8453, allowed={"USDC"})
 
+    # Only the discovered vault is read on-chain — never the full enumeration.
+    adapter.get_all_markets.assert_not_called()
+    adapter.get_vault_info_full.assert_awaited_once()
     assert len(rows) == 1
+    assert rows[0].market_id == vault
     assert rows[0].asset_address == USDC_ADDRESS
     assert rows[0].asset_symbol == "USDC"
-    assert rows[0].utilization == pytest.approx(0.75)
+    assert rows[0].supply_apy == pytest.approx(0.05)  # from Delta Lab
+    assert rows[0].utilization == pytest.approx(0.75)  # from on-chain cash/borrows
     assert rows[0].tvl_usd == pytest.approx(0.0001)
+
+
+async def test_euler_stable_vaults_filters_delta_lab_rows():
+    import venues  # noqa: PLC0415
+
+    venues._euler_discovery_cache["ts"] = 0.0
+    venues._euler_discovery_cache["by_chain"] = {}
+    payload = {"data": [
+        {"venue_name": "euler-v2-base", "chain_id": 8453, "symbol": "USDC",
+         "market_external_id": "0x797dd80692c3b2dadabce8e30c07fde5307d48a9",
+         "net_supply_apr_now": 0.05, "supply_tvl_usd": 1_000_000.0},
+        {"venue_name": "euler-v2-base", "chain_id": 8453, "symbol": "WETH",  # non-stable: dropped
+         "market_external_id": "0x1111111111111111111111111111111111111111",
+         "net_supply_apr_now": 0.02},
+        {"venue_name": "aave-base", "chain_id": 8453, "symbol": "USDC",  # non-euler: dropped
+         "market_external_id": "0x2222222222222222222222222222222222222222"},
+    ]}
+    with patch.object(venues.DELTA_LAB_CLIENT, "screen_lending", AsyncMock(return_value=payload)):
+        found = await venues._euler_stable_vaults(8453, {"USDC"})
+
+    assert len(found) == 1
+    (vault, meta), = found.items()
+    assert vault.lower() == "0x797dd80692c3b2dadabce8e30c07fde5307d48a9"
+    assert meta["symbol"] == "USDC"
 
 
 async def test_morpho_vault_scan_maps_listed_stable_vaults():
@@ -572,9 +617,9 @@ async def test_update_with_confirm_runs_gas_check_then_executes(fake_signing_cal
     positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
     fake_unlend = AsyncMock(return_value=(True, {"hash": "0xWITHDRAW"}))
     fake_lend = AsyncMock(return_value=(True, {"hash": "0xDEPOSIT"}))
-    # First read: idle wallet sweep (nothing idle). Then source balance before/after
-    # the withdraw — the delta is what actually came back.
-    fake_balance = AsyncMock(side_effect=[0, 0, 100_000 * 10**6])
+    # Source balance before/after the withdraw — the delta is what actually came back.
+    # (Idle balances no longer use get_token_balance; they come from _fetch_chain_balances.)
+    fake_balance = AsyncMock(side_effect=[0, 100_000 * 10**6])
 
     with (
         patch("main.scan_all", AsyncMock(return_value=scan)),
@@ -1114,18 +1159,23 @@ async def test_auto_rotate_survives_notify_failure(monitor_state):
 # idle wallet balances → deposit legs
 # ---------------------------------------------------------------------------
 
+def _chain_balances(native=10**18, **tokens_by_chain):
+    # tokens_by_chain: chain_id (as str like "c8453") -> {addr_lower: balance}
+    out = {}
+    for k, toks in tokens_by_chain.items():
+        out[int(k[1:])] = {"native": native, "tokens": toks}
+    return out
+
+
 async def test_idle_wallet_balance_produces_deposit_leg(fake_signing_callback):
     scan = [_make_row("aave_v3", USDC_ADDRESS, 0.040)]
     # Large enough that 400 bps of uplift pays back gas within gas_amortization_days.
-    balances = {(USDC_ADDRESS.lower(), 8453): 100_000 * 10**6}
-
-    async def fake_balance(token_address, chain_id, wallet_address, **kwargs):
-        return balances.get((str(token_address).lower(), chain_id), 0)
+    balances = _chain_balances(c8453={USDC_ADDRESS.lower(): 100_000 * 10**6})
 
     with (
         patch("main.scan_all", AsyncMock(return_value=scan)),
         patch("main.positions_all", AsyncMock(return_value=[])),
-        patch("main.get_token_balance", side_effect=fake_balance),
+        patch("main._fetch_chain_balances", AsyncMock(return_value=balances)),
         patch("main.get_wallet_signing_callback", fake_signing_callback),
     ):
         result = await rotator.action_quote_rotation(CONFIG)
@@ -1141,14 +1191,12 @@ async def test_idle_wallet_balance_produces_deposit_leg(fake_signing_callback):
 
 async def test_idle_dust_balance_is_ignored(fake_signing_callback):
     scan = [_make_row("aave_v3", USDC_ADDRESS, 0.040)]
-
-    async def fake_balance(token_address, chain_id, wallet_address, **kwargs):
-        return int(0.5 * 10**6)  # below IDLE_DUST_HUMAN
+    balances = _chain_balances(c8453={USDC_ADDRESS.lower(): int(0.5 * 10**6)})  # below IDLE_DUST_HUMAN
 
     with (
         patch("main.scan_all", AsyncMock(return_value=scan)),
         patch("main.positions_all", AsyncMock(return_value=[])),
-        patch("main.get_token_balance", side_effect=fake_balance),
+        patch("main._fetch_chain_balances", AsyncMock(return_value=balances)),
         patch("main.get_wallet_signing_callback", fake_signing_callback),
     ):
         result = await rotator.action_quote_rotation(CONFIG)
@@ -1163,13 +1211,11 @@ async def test_idle_balance_read_failure_does_not_block_planning(fake_signing_ca
     ]
     positions = [_make_position("aave_v3", USDC_ADDRESS, 100_000 * 10**6)]
 
-    async def broken_balance(*args, **kwargs):
-        raise RuntimeError("rpc down")
-
+    # Multicall failed for the chain → empty balances; venue rotation must still plan.
     with (
         patch("main.scan_all", AsyncMock(return_value=scan)),
         patch("main.positions_all", AsyncMock(return_value=positions)),
-        patch("main.get_token_balance", side_effect=broken_balance),
+        patch("main._fetch_chain_balances", AsyncMock(return_value={8453: {"native": None, "tokens": {}}})),
         patch("main.get_wallet_signing_callback", fake_signing_callback),
     ):
         result = await rotator.action_quote_rotation(CONFIG)
@@ -1552,3 +1598,130 @@ async def test_scan_all_caps_concurrency(monkeypatch):
     with patch("venues.get_read_adapter", AsyncMock(return_value=object())):
         await venues.scan_all(["aave_v3"], [1, 137, 8453, 42161], ["USDC"], strict=True, concurrency=2)
     assert state["peak"] <= 2
+
+
+# ---------------------------------------------------------------------------
+# request-volume redesign: euler de-enumeration, batched balances, gas reuse
+# ---------------------------------------------------------------------------
+
+async def test_euler_positions_use_user_state_without_enumeration():
+    from venues import _euler_positions  # noqa: PLC0415
+
+    vault = "0x797dd80692c3b2dAdaBCe8e30C07fDE5307D48a9"
+    adapter = AsyncMock()
+    adapter.get_full_user_state = AsyncMock(return_value=(True, {"positions": [
+        {"vault": vault, "underlying": USDC_ADDRESS, "assets": 1_000 * 10**6},
+    ]}))
+    discovered = {vault: {"vault": vault, "apy": 0.05, "symbol": "USDC",
+                          "is_frozen": False, "is_paused": False, "tvl_usd": 1e6}}
+
+    @asynccontextmanager
+    async def fake_w3(chain_id):
+        w = AsyncMock()
+        w.to_checksum_address = lambda a: a
+        yield w
+
+    with (
+        patch("venues._euler_stable_vaults", AsyncMock(return_value=discovered)),
+        patch("venues.web3_from_chain_id", fake_w3),
+    ):
+        positions = await _euler_positions(adapter, 8453, {"USDC"}, "0xACC")
+
+    adapter.get_all_markets.assert_not_called()  # never enumerate all vaults
+    # held vault is in the discovered set → no per-vault info read needed either
+    adapter.get_vault_info_full.assert_not_called()
+    assert len(positions) == 1
+    assert positions[0].market_id == vault
+    assert positions[0].asset_symbol == "USDC"
+    assert positions[0].supply_raw == 1_000 * 10**6
+    assert positions[0].decimals == 6
+
+
+def test_idle_positions_from_balances_is_pure():
+    scan = [_make_row("aave_v3", USDC_ADDRESS, 0.04)]
+    cb = {8453: {"native": 10**18, "tokens": {USDC_ADDRESS.lower(): 100_000 * 10**6}}}
+    out = rotator._idle_positions_from_balances(scan, cb)
+    assert len(out) == 1
+    assert out[0].asset_symbol == "USDC"
+    assert out[0].supply_raw == 100_000 * 10**6
+    # dust is ignored
+    dust = {8453: {"native": 10**18, "tokens": {USDC_ADDRESS.lower(): int(0.5 * 10**6)}}}
+    assert rotator._idle_positions_from_balances(scan, dust) == []
+    # missing chain → no idle
+    assert rotator._idle_positions_from_balances(scan, {}) == []
+
+
+async def test_gas_topup_state_reuses_multicall_native_balance():
+    # chain 8453 native came from the multicall; chain 1 didn't → one direct fallback read.
+    chain_balances = {8453: {"native": 10**18, "tokens": {}}, 1: {"native": None, "tokens": {}}}
+    direct = AsyncMock(return_value=10**14)  # below the gas floor → chain 1 is starved
+    with patch("main._gas_balance_wei", direct):
+        state = await rotator._gas_topup_state(
+            [8453, 1], rotator.DEFAULT_MIN_GAS_WEI, chain_balances, address="0xACC",
+        )
+    assert state["balances"][8453] == 10**18
+    assert state["balances"][1] == 10**14
+    direct.assert_awaited_once()  # only the chain the multicall couldn't read
+    assert 1 in state["starved"] and 8453 not in state["starved"]
+
+
+async def test_erc4626_share_positions_batches_balance_then_convert():
+    import venues  # noqa: PLC0415
+
+    from wayfinder_paths.adapters.multicall_adapter.adapter import (
+        MulticallResult,  # noqa: PLC0415
+    )
+
+    rows = [
+        _make_row("morpho_vault", "0x" + "a" * 40, 0.05),
+        _make_row("morpho_vault", "0x" + "b" * 40, 0.06),
+    ]
+    u256 = lambda n: n.to_bytes(32, "big")  # noqa: E731
+    agg_calls: list = []
+
+    class FakeMC:
+        decode_uint256 = staticmethod(lambda d: int.from_bytes(d, "big"))
+
+        def __init__(self, **kw):
+            self.web3 = kw["web3"]
+
+        def encode_erc20_balance(self, token, acct):
+            return ("bal", token)
+
+        def build_call(self, addr, data):
+            return ("conv", addr)
+
+        async def aggregate(self, calls):
+            agg_calls.append(list(calls))
+            if len(agg_calls) == 1:  # balanceOf batch: vault A=0, B=500 shares
+                return MulticallResult(block_number=1, return_data=(u256(0), u256(500)))
+            return MulticallResult(block_number=1, return_data=(u256(1000),))  # convertToAssets(B)
+
+    class FakeEth:
+        def contract(self, address=None, abi=None):
+            c = AsyncMock()
+            c.encode_abi = lambda fn, args: b""
+            return c
+
+    class FakeWeb3:
+        eth = FakeEth()
+
+        def to_checksum_address(self, a):
+            return a
+
+    @asynccontextmanager
+    async def fake_w3(chain_id):
+        yield FakeWeb3()
+
+    with (
+        patch("venues.MulticallAdapter", FakeMC),
+        patch("venues.web3_from_chain_id", fake_w3),
+    ):
+        out = await venues._erc4626_share_positions(8453, "0xACC", rows, venue="morpho_vault")
+
+    assert len(agg_calls) == 2          # one balanceOf batch + one convertToAssets batch (not 2N reads)
+    assert len(agg_calls[0]) == 2       # both vaults in a single balanceOf aggregate
+    assert len(agg_calls[1]) == 1       # only the held vault converted
+    assert len(out) == 1
+    assert out[0].market_id == "0x" + "b" * 40
+    assert out[0].supply_raw == 1000
