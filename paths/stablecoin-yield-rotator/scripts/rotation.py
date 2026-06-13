@@ -21,6 +21,10 @@ UTIL_SPIKE_CEILING = 0.95
 HEADROOM_FRACTION_FLOOR = 0.05
 DEFAULT_MAX_STABLECOIN_APY = 0.50
 
+# Pseudo-venue for idle wallet balances. Positions with this venue earn 0% and
+# need no unlend step — the planner turns them into deposit legs.
+WALLET_VENUE = "wallet"
+
 
 class DiscoveryGapError(RuntimeError):
     """Raised when quote_rotation can't resolve a current position's APY from the scan."""
@@ -54,6 +58,11 @@ class RotationLeg:
     is_cross_chain: bool
     skipped: bool = False
     skip_reason: str | None = None
+    # Estimated USD spent topping up native gas on the destination chain (0 when the
+    # destination is already funded). Included in the payback/constraint math.
+    gas_topup_usd: float = 0.0
+    # Executable top-up details attached after planning (BRAP quote, sizing, native token).
+    gas_topup: dict[str, Any] | None = None
     # Populated for cross-chain legs after planning. Carries the BRAP quote that the
     # user confirms; execution re-quotes and refuses to broadcast if it's materially worse.
     bridge_quote: dict[str, Any] | None = None
@@ -110,6 +119,8 @@ def leg_to_dict(leg: RotationLeg) -> dict:
         "bridge_from_token": leg.bridge_from_token,
         "bridge_to_token": leg.bridge_to_token,
         "from_asset_address": leg.from_asset_address,
+        "gas_topup_usd": leg.gas_topup_usd,
+        "gas_topup": leg.gas_topup,
     }
 
 
@@ -146,6 +157,8 @@ def leg_from_dict(d: dict[str, Any]) -> RotationLeg:
         bridge_from_token=d.get("bridge_from_token"),
         bridge_to_token=d.get("bridge_to_token"),
         from_asset_address=d.get("from_asset_address"),
+        gas_topup_usd=float(d.get("gas_topup_usd") or 0.0),
+        gas_topup=d.get("gas_topup"),
     )
 
 
@@ -217,13 +230,24 @@ def quote_rotation(
     asset_price_usd: float = 1.0,
     min_target_tvl_usd: float | None = None,
     max_target_apy: float | None = DEFAULT_MAX_STABLECOIN_APY,
+    gas_topup_usd_by_chain: dict[int, float] | None = None,
+    gasless_source_chains: set[int] | None = None,
 ) -> RotationPlan:
     """Build a rotation plan that satisfies all configured constraints.
 
     `asset_price_usd` defaults to 1.0 because we operate strictly on stablecoins;
     override per-asset if you want to model depegs.
+
+    `gas_topup_usd_by_chain` maps gas-starved destination chains to the estimated USD
+    cost of topping up native gas there; that cost is added to the leg's rotation cost
+    so the payback/gas gates decide whether the rotation is still worth it.
+    `gasless_source_chains` are chains where the wallet cannot even sign the first
+    transaction — legs sourced there are skipped (a top-up cannot be executed from a
+    chain with no gas).
     """
     blocked = {m.lower() for m in (blocklist_markets or [])}
+    topup_usd_by_chain = gas_topup_usd_by_chain or {}
+    gasless_sources = gasless_source_chains or set()
     plan = RotationPlan()
 
     by_asset = _aggregate_positions(positions)
@@ -240,7 +264,28 @@ def quote_rotation(
             continue
 
         for pos in asset_positions:
-            if pos.venue not in EXECUTABLE_VENUES:
+            if pos.chain_id in gasless_sources:
+                # No native gas to sign even the first tx on this chain; a top-up can't
+                # be executed from here either. Surface it instead of planning a dead leg.
+                plan.skipped.append(RotationLeg(
+                    asset_symbol=asset, from_venue=pos.venue, from_chain_id=pos.chain_id,
+                    from_market_id=pos.market_id, to_venue="", to_chain_id=0, to_market_id="",
+                    raw_amount=pos.supply_raw, decimals=pos.decimals,
+                    current_apy=0.0, target_apy=0.0, apy_delta_bps=0,
+                    estimated_uplift_usd_30d=0.0, estimated_gas_usd=0.0,
+                    estimated_bridge_fee_usd=0.0, payback_days=0.0,
+                    is_cross_chain=False, skipped=True,
+                    skip_reason=(
+                        f"no native gas on source chain {pos.chain_id}; "
+                        "fund gas there manually — a top-up needs gas to execute"
+                    ),
+                ))
+                continue
+            if pos.venue == WALLET_VENUE:
+                # Idle wallet balance: earns nothing, needs no unlend — any target
+                # beating min_apy_delta_bps produces a deposit leg.
+                current_apy = 0.0
+            elif pos.venue not in EXECUTABLE_VENUES:
                 # We can't unlend from a non-executable venue (no adapter write methods). Skip it
                 # with a clear reason instead of producing an unexecutable leg.
                 plan.skipped.append(RotationLeg(
@@ -254,18 +299,19 @@ def quote_rotation(
                     skip_reason=f"source venue {pos.venue!r} is not executable in this path",
                 ))
                 continue
-            current_apy_candidates = [
-                r.supply_apy for r in scan
-                if r.venue == pos.venue and r.chain_id == pos.chain_id and r.market_id == pos.market_id
-            ]
-            if not current_apy_candidates:
-                # The position's own market is missing from scan → discovery is incomplete.
-                # Refuse to plan rather than inflate apy_delta_bps using a 0.0 default.
-                raise DiscoveryGapError(
-                    f"current market {pos.venue}@{pos.chain_id}/{pos.market_id} missing from scan; "
-                    "rerun with strict scan or add the venue to the scan inputs"
-                )
-            current_apy = current_apy_candidates[0]
+            else:
+                current_apy_candidates = [
+                    r.supply_apy for r in scan
+                    if r.venue == pos.venue and r.chain_id == pos.chain_id and r.market_id == pos.market_id
+                ]
+                if not current_apy_candidates:
+                    # The position's own market is missing from scan → discovery is incomplete.
+                    # Refuse to plan rather than inflate apy_delta_bps using a 0.0 default.
+                    raise DiscoveryGapError(
+                        f"current market {pos.venue}@{pos.chain_id}/{pos.market_id} missing from scan; "
+                        "rerun with strict scan or add the venue to the scan inputs"
+                    )
+                current_apy = current_apy_candidates[0]
 
             # Find the best target that beats current_apy by min_apy_delta_bps and
             # passes constraints. Walk down the ranked list so utilization-spike
@@ -365,6 +411,10 @@ def quote_rotation(
             position_usd = (raw_amount / (10 ** pos.decimals)) * asset_price_usd
             uplift_usd_30d = position_usd * max(0.0, target_apy - current_apy) * (30.0 / 365.0)
             gas_usd = cross_chain_gas_usd if is_cross_chain else same_chain_gas_usd
+            # Destination needs a native gas top-up: its full cost is part of this
+            # rotation's cost, so it must amortize like gas does.
+            topup_usd = topup_usd_by_chain.get(chosen.chain_id, 0.0) if chosen.chain_id != pos.chain_id else 0.0
+            gas_usd += topup_usd
             bridge_usd = bridge_fee_usd if is_cross_chain else 0.0
             payback = _payback_days(uplift_usd_30d, gas_usd, bridge_usd)
 
@@ -387,6 +437,7 @@ def quote_rotation(
                 payback_days=payback,
                 is_cross_chain=is_cross_chain,
                 from_asset_address=pos.asset_address,
+                gas_topup_usd=topup_usd,
             )
 
             # Constraint checks

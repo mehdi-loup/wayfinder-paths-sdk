@@ -20,6 +20,7 @@ Use this skill whenever the user wants **secure / safe / best stablecoin yield**
 - `quote-rotation`: read-only proposed rotation deltas vs current positions, with expected uplift, gas estimate, payback days. Operates on cached scan data plus live wallet positions.
 - `deposit`: deposit a specific asset amount into the top-ranked venue. Requires `--amount` and `--asset`.
 - `update`: re-quote, gas-check, then execute the rotation. Without `--confirm`, emits the plan with `status=requires_confirmation` and broadcasts nothing. With `--confirm`, executes withdraw → bridge (if cross-chain) → deposit per leg, halting on first revert. Bridge legs deposit the actual post-bridge balance delta, not the pre-bridge amount.
+- `auto-rotate`: unattended `update` for runner scheduling — executes without interactive confirmation and emails a summary on executions and new failures (no-ops are silent; repeated identical halts alert once). Idle wallet stables are swept into the best venue automatically. Gas-starved destination chains get an automatic native-gas top-up (a stable slice bridged to gas, its cost counted in the rotation decision); gas-starved source chains are skipped with a fund-gas notification. Schedule it with `wayfinder runner add-job --type script --script-path paths/stablecoin-yield-rotator/scripts/main.py --arg --action --arg auto-rotate --cron "0 9 * * *" --timezone America/Toronto` (daily at 09:00). Warn the user that runner jobs are live fund-moving automation outside the safety-review hook before setting one up.
 - `status`: aggregated positions across all venues with USD totals and blended APY.
 - `withdraw`: liquidate to stablecoin in the wallet. `--amount` for partial; full if omitted.
 - `gorlami-scenario`: creates a Gorlami Base fork, seeds wallet ETH + USDC, then runs scan → deposit → status → withdraw → status against Aave V3. Defaults to 10 USDC and broadcasts only to the fork.
@@ -43,7 +44,7 @@ When the user asks for *secure* yield, this path's filtered, executable set **is
 
 ## Steps
 
-1. Inspect `inputs/config.yaml` to confirm chains, assets, venues, and constraints match user intent. The `wallet` field resolves to the configured label if present, else to the only connected wallet; if several wallets exist and none matches, the action fails listing the choices — set `wallet` accordingly.
+1. Inspect `inputs/config.yaml` to confirm chains, assets, venues, and constraints match user intent. Leave `wallet` blank to use the session-connected wallet — resolution prefers the connected (remote/session) wallet over local dev wallets, so a checked-out `config.json` with a `main` wallet won't shadow it. Precedence: an explicit `wallet` naming a connected wallet → the sole connected wallet → an explicit `wallet` naming any local wallet → the sole wallet overall → else the action fails listing the choices (set `wallet` to disambiguate).
 2. Run the requested action with `python scripts/wf_run.py -- --action <action> [args]`.
 3. For live fund-moving changes, run `gorlami-scenario` first when practical; it validates the path on a fork before any mainnet broadcast.
 4. For `update`, always run `quote-rotation` first and present the table to the user before broadcasting.

@@ -1,4 +1,6 @@
-wallet: main
+# Leave blank to use the session-connected wallet (recommended for hosted runs).
+# Set a label only to pin a specific wallet from config.json.
+wallet:
 chains: [1, 137, 8453, 42161, 999]
 assets: [USDC, USDT, DAI, USDS, USDE, GHO]
 # sparklend is read-only in this adapter (no lend/unlend exposed); excluded from
@@ -14,3 +16,9 @@ constraints:
   blocklist_markets: []
 slippage_bps: 30
 ledger_record: true
+# Max concurrent reads through the Wayfinder RPC proxy (rate-limited per API key).
+# Reads also retry 429s with backoff; lower this if you still see rate-limit errors.
+rpc_concurrency: 4
+# Ranked-scan cache lifetime (seconds). Default 21600 = 6h. Positions are always read
+# live; only the (wallet-agnostic) APY/TVL ranking is cached. Lower for fresher ranking.
+scan_cache_ttl_seconds: 21600
