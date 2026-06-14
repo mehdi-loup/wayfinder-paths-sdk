@@ -26,6 +26,29 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 - `scripts/rotation.py` — quote-rotation constraint engine
 - `skill/instructions.md` — canonical skill instructions
 
+## Wallet & data flow
+
+What this path reads, where it computes, and what leaves your machine:
+
+- **Wallet inputs.** The wallet is resolved from the session-connected wallet (or an explicit `wallet` in `inputs/config.yaml`). The path reads only the wallet **address** to look up on-chain balances and lending positions — it never reads, requests, or stores private keys or seed phrases. Signing is delegated to the host/execution service.
+- **Reads (network).** On-chain balances, positions, APYs, TVL, and utilization are read through the rate-limited **Wayfinder RPC proxy** and the protocol adapters (Aave V3, Morpho, Euler V2, Hyperlend, Moonwell). Euler's stable vaults are discovered via a single **Delta Lab** `screen_lending` call. These are read-only queries.
+- **Compute (local).** The **position and balance objects** returned by the adapters are used **only locally** — for ranking, the rotation plan (deltas, gas, payback, constraint gates) in `scripts/rotation.py`, and `status` display — **or** they are handed to **host-bound Wayfinder execution paths** (the SDK / hosted Wayfinder execution service that signs and broadcasts on the configured wallet). They are **never serialized to or transmitted to any third party**: there is no analytics, telemetry, or external POST of wallet, position, or balance data anywhere in this path.
+- **Writes (network).** The only outbound fund-moving traffic is **signed transactions broadcast to the relevant chains** (withdraw → bridge via BRAP → deposit), and only after the confirmation gate below. `auto-rotate` additionally sends an **email summary** of executed rotations / new failures via the Wayfinder notify service — a human-readable rotation summary only (asset, venue, USD amounts), not raw position objects or wallet credentials.
+- **Applet.** The bundled applet (`applet/dist/index.html`) is a **static, read-only snapshot** — `bridge: []`, `externalOrigins: []`, no runtime fetch. It renders APY data baked into the path at build time and **never connects to, reads, or transmits any wallet or position data**.
+
+> **In short:** position objects stay on the host running the path — used locally for the decision, or via host-bound Wayfinder execution paths to sign/broadcast — and are never sent to third parties.
+
+### Confirmation safeguards (execution paths)
+
+| Action | Gate before any broadcast |
+|---|---|
+| `scan`, `quote-rotation`, `status` | Read-only — no broadcast. |
+| `deposit`, `withdraw` | Fund-moving. Via MCP they pass the Claude **safety-review hook** (human confirmation preview). |
+| `update` | Plan-only by default (`status=requires_confirmation`, nothing broadcast). Broadcasts **only** with `--confirm`, executing leg-by-leg and **halting on the first revert**. |
+| `auto-rotate` | Runner-only, runs `update --confirm` **without interactive confirmation** — the `inputs/config.yaml` constraints (APY delta, gas payback, TVL/utilization guards, diversification cap) are the only gate, and runner jobs do **not** pass the safety-review hook. Treat as live fund-moving automation. |
+
+Before any fund-moving execution, the path re-checks live wallet positions and target venues (cached scan data is used only for ranking), verifies native gas on each chain in the path, and gates cross-chain bridges on `uplift_usd × payback_days > bridge_fee_usd × 2`.
+
 ## Safety
 
 - Quote before rotating (`quote-rotation` then `update`).
