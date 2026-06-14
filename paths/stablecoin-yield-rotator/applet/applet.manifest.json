@@ -5,9 +5,7 @@
   "readySelector": "[data-path-ready='true']",
   "permissions": {
     "bridge": [],
-    "externalOrigins": [
-      "https://github.com"
-    ],
+    "externalOrigins": [],
     "walletMode": "optional"
   }
 }

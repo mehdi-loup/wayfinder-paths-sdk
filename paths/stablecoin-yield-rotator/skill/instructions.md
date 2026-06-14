@@ -33,6 +33,13 @@ When the user asks for *secure* yield, this path's filtered, executable set **is
 - If you also pulled raw discovery data (e.g. Delta Lab) and it shows higher headline rates, frame those as **higher-risk, unfiltered, and not execution-guarded** — not as the better choice for a "secure" request.
 - Lead with the path's top *executable* venue and its safety rationale; mention higher unfiltered rates only as an explicit, caveated alternative the user can opt into.
 
+## Wallet & data flow
+
+- **Inputs.** Only the wallet **address** is read (to look up on-chain balances and lending positions); private keys / seed phrases are never read, requested, or stored — signing is delegated to the host / Wayfinder execution service.
+- **Position objects stay local.** Balance and position objects returned by the adapters are used **only locally** — for ranking, the rotation plan (`scripts/rotation.py`), and `status` — **or** are handed to **host-bound Wayfinder execution paths** that sign and broadcast on the configured wallet. They are **never serialized to or transmitted to any third party**; there is no analytics/telemetry or external POST of wallet, position, or balance data in this path.
+- **Outbound traffic.** Reads go through the Wayfinder RPC proxy + adapters (and one Delta Lab `screen_lending` call for Euler discovery). The only fund-moving output is **signed transactions to the relevant chains**, after the confirmation gate. `auto-rotate` also emails a human-readable rotation summary (asset/venue/USD amounts) via the Wayfinder notify service — not raw position objects.
+- **Applet.** The bundled applet is a static, read-only APY snapshot (`bridge: []`, `externalOrigins: []`, no runtime fetch) and never touches wallet or position data.
+
 ## Safety
 
 - **Never rotate without quoting first.** Show the user a current → proposed table (APY delta, gas, payback days) and ask for confirmation, unless the user explicitly said "just rotate".
