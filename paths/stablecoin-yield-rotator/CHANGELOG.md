@@ -2,6 +2,19 @@
 
 Notable changes to the Stablecoin Yield Rotator path.
 
+## 0.2.3
+
+Republish for archive-policy compliance. No changes to path content, assets, venues, or
+actions.
+
+### Fixed
+
+- **Deterministic skill-export archives.** The uploaded skill-export zips previously
+  carried live filesystem timestamps, so a server-side rebuild could not match the upload
+  and archive-policy verification failed. The archiver now normalizes every entry (fixed
+  timestamp + permissions, junk filtered), matching the bundle/source archives, so the
+  skill exports are reproducible.
+
 ## 0.2.2
 
 Documentation clarity for review. No functional changes to assets, venues, or actions.
