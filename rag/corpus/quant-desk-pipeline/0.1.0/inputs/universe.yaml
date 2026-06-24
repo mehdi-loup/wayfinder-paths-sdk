@@ -1,0 +1,4 @@
+# Optional override of the Phase 4b test universe. When omitted, the pipeline
+# uses policy.universe.default_symbols and locks the test set after pre-screening.
+symbols: ["BTC", "ETH", "SOL", "BNB", "AVAX", "LINK", "DOGE"]
+overrides: ["HYPE"]

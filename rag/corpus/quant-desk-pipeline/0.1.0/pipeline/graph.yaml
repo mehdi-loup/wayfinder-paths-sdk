@@ -1,0 +1,67 @@
+# Lean quant-desk flow on the spread-radar archetype. The archetype's required
+# nodes — intake, universe_builder, pair_screener, signal_research, skeptic,
+# finalize — are all present (pair_screener is a pass-through owned by the
+# universe-builder agent). The shape is: research the idea, get a SIMPLE backtest
+# working (first pass), FIT it to crypto (grid/experiment/tweak with a train/test
+# split), then OPTIONALLY stress it (robustness), then report.
+nodes:
+  - id: "intake"            # load locked topic + scope (orchestrator-owned)
+  - id: "discovery"         # find papers + feasibility prune (one pass)
+  - id: "methodology"       # extract the signal formula
+  - id: "skeptic"           # fatal-flaw filter, isolated context (archetype node)
+  - id: "implementation"    # signal_fn per surviving paper
+  - id: "universe_builder"  # resolve symbols + lock the small fitting basket (archetype node)
+  - id: "pair_screener"     # pass-through: universe-builder owns the screen (archetype node)
+  - id: "signal_research"   # FIRST PASS — simple smoke backtest, fail-fast gate (archetype node)
+  - id: "fitting"           # iterate: grid + experiment + crypto-adapt, train/test split inside the fitting window
+  - id: "robustness"        # OPTIONAL — expand window + tickers + fee tiers → robustness report
+  - id: "synthesis"         # report + memory entry
+  - id: "finalize"          # emit standard response envelope (orchestrator-owned)
+
+edges:
+  - from: "intake"
+    to: "discovery"
+  - from: "discovery"
+    to: "methodology"
+  - from: "methodology"
+    to: "skeptic"
+  - from: "skeptic"
+    to: "implementation"
+  - from: "implementation"
+    to: "universe_builder"
+  - from: "universe_builder"
+    to: "pair_screener"
+  - from: "pair_screener"
+    to: "signal_research"
+  - from: "signal_research"
+    to: "fitting"
+  - from: "fitting"
+    to: "robustness"
+  - from: "robustness"
+    to: "synthesis"
+  - from: "synthesis"
+    to: "finalize"
+
+failure_edges:
+  # Phase 1b reloop floor: thin candidate pool re-runs discovery (max 2 reloops)
+  - from: "discovery"
+    on: "thin_pool"
+    to: "discovery"
+    max_retries: 2
+  # Skeptic killed every paper → nothing to implement, report null at synthesis
+  - from: "skeptic"
+    on: "all_rejected"
+    to: "synthesis"
+    max_retries: 0
+  # First pass produced degenerate output (broken impl / no variance / no trades) →
+  # nothing worth fitting, report the dud. NOTE: a signal that merely underperforms
+  # paper-spec thresholds is NOT degenerate — it still advances to fitting.
+  - from: "signal_research"
+    on: "degenerate"
+    to: "synthesis"
+    max_retries: 0
+  # Fitting explored the grid/templates and found no viable config → report.
+  - from: "fitting"
+    on: "not_viable"
+    to: "synthesis"
+    max_retries: 0

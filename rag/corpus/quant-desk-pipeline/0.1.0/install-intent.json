@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "78ce3d388dcc93ff52eeeb754cbf0c9b",
+    "path_slug": "quant-desk-pipeline",
+    "version": "0.1.0",
+    "bundle_sha256": "991905a5dec9625eb41c7ad00527e72e209805dcb88a61bfde5ffd27553e9278",
+    "issued_at": "2026-06-03T13:33:04.641315+00:00",
+    "expires_at": "2026-06-04T13:33:04.641315+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "663",
+    "install_target": "/Users/mln/Documents/Claude/Projects/Job Hunt/day11-rag/corpus/quant-desk-pipeline/0.1.0",
+    "bundle_url": "https://strategies.wayfinder.ai/api/v1/paths/quant-desk-pipeline/versions/0.1.0/bundle.zip",
+    "applet_url": "https://strategies.wayfinder.ai/api/v1/paths/quant-desk-pipeline/versions/0.1.0/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "gjoFyTEbQOmS34gDIf7svsEjZSevnIdD8JrHsXwzT2k"
+}

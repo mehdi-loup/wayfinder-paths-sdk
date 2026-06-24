@@ -1,0 +1,9 @@
+positions:
+  # - instrument: ETH-PERP
+  #   venue: hyperliquid
+  #   side: long
+  #   notional_usd: 10000
+instruments:
+  polymarket: true
+  perps: true
+max_notional_usd: 25000

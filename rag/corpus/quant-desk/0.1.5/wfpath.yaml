@@ -1,0 +1,74 @@
+schema_version: "0.1"
+
+slug: quant-desk
+name: "Quant Desk"
+version: "0.1.5"
+summary: >-
+  Paper-to-trade quant research desk. Finds papers on a narrow signal topic,
+  skeptically prunes weak methodology, implements survivors, runs a fixed
+  3-phase harness, iterates on near-misses (Phase 5b), pushes winners further
+  (Phase 5c), and validates generalization via multi-year CCXT walk-forward
+  on ~11 crypto symbols (Phase 5d). Designed for honest replication-failure
+  reporting — distinguishes real alpha from regime-specific flukes.
+
+primary_kind: skill
+
+components:
+  - id: "main"
+    kind: script
+    path: "scripts/main.py"
+
+tags:
+  - quant
+  - research
+  - replication
+  - backtest
+  - signals
+  - skeptic
+  - regime
+  - academic
+  - papers
+  - walk-forward
+  - ccxt
+  - hurst
+  - momentum
+  - mean-reversion
+
+skill:
+  enabled: true
+  source: generated
+  name: "quant-desk"
+  description: >-
+    Paper-to-trade quant research desk. Finds academic papers on a narrow
+    signal topic, skeptically prunes weak methodology, implements the
+    survivors, backtests them on crypto, iterates on near-misses, pushes
+    winners further, and generalizes via multi-year multi-symbol
+    walk-forward validation.
+  instructions: "skill/instructions.md"
+  runtime:
+    mode: thin
+    package: "wayfinder-paths"
+    version: "0.8.0"
+    python: ">=3.12,<3.13"
+    component: "main"
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: "WAYFINDER_API_KEY"
+    config_path_env: "WAYFINDER_CONFIG_PATH"
+
+host:
+  claude:
+    rules_file: ".claude/CLAUDE.md"
+    skill_dir: ".claude/skills"
+    agent_dir: ".claude/agents"
+    settings_file: ".claude/settings.json"
+  opencode:
+    rules_file: "AGENTS.md"
+    config_file: "opencode.json"
+    skill_dir: ".opencode/skills"
+    agent_dir: ".opencode/agents"
+    command_dir: ".opencode/commands"
+    plugin_dir: ".opencode/plugins"
+    tool_dir: ".opencode/tools"

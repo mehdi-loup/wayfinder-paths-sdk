@@ -1,0 +1,22 @@
+# Zero-reproduction run: every paper failed the harness (REJECT). Honest null.
+name: "null_state"
+output:
+  signal_snapshot:
+    primary_signal: "none"
+    verdict: "REJECT"
+  selected_playbook:
+    id: "null_state"
+    score: 0.0
+  candidate_expressions:
+    - id: candidate-1
+      score: 0.30
+  null_state:
+    selected: true
+    reason: "0 of N papers reproduced after grid + remedial iteration"
+  risk_checks:
+    passed: true
+    mode: "null"
+  job:
+    mode: "null"
+    armed: false
+  next_invalidation: "re-run on alt-heavy universe or longer bear-inclusive window"

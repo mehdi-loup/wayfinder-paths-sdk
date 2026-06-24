@@ -1,0 +1,22 @@
+# A signal that cleared all 3 harness phases AND generalized (PASS).
+name: "base_case"
+output:
+  signal_snapshot:
+    primary_signal: "funding_zscore_reversion"
+    verdict: "PASS"
+  selected_playbook:
+    id: "replicated_signal"
+    score: 0.70
+  candidate_expressions:
+    - id: candidate-1
+      score: 0.70
+  null_state:
+    selected: false
+    reason: "signal reproduced and generalized"
+  risk_checks:
+    passed: true
+    mode: "armed"
+  job:
+    mode: "armed"
+    armed: true
+  next_invalidation: "re-test if median multi-symbol Sharpe falls below 0.5"

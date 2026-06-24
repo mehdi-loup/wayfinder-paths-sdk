@@ -1,0 +1,59 @@
+domains:
+  protocol:
+    enabled: true
+    focus_areas:
+      - "L1/L2 architecture changes"
+      - "tokenomics updates (fee-switch, buyback, emissions)"
+      - "governance binaries within 60-540 days"
+      - "protocol mainnet milestones"
+  defi:
+    enabled: true
+    focus_areas:
+      - "lending/borrow curve shifts"
+      - "stablecoin collateral regime shifts"
+      - "LRT / restaking structural changes"
+      - "Pendle PT/YT term-structure dislocations"
+  crypto_regulatory:
+    enabled: true
+    focus_areas:
+      - "SEC / CFTC rule-making with dated comment windows"
+      - "BCBS crypto bank capital rules"
+      - "IRS / Treasury tax guidance"
+      - "MiCA / UK / HK / SG enforcement patterns"
+  microstructure:
+    enabled: true
+    focus_areas:
+      - "CEX perp funding regimes and basis"
+      - "ETF creation/redemption flow regime shifts"
+      - "validator/staking concentration shifts"
+      - "MEV or orderflow supply chain changes"
+
+# Crypto-specific hardened gates (derived from R3/R5 learnings).
+crypto_gates:
+  # Catalysts must be far enough out that the narrative is not yet priced.
+  min_catalyst_days: 60
+  max_catalyst_days: 540
+  # Below this scale, edge can't compound even if thesis is right.
+  min_scale_usd: 100000000
+  # Instead of "sell-side silence = edge" (inverts in crypto), require
+  # the underlying token/protocol's 30-day price move to be below threshold.
+  # Above this, the thesis is likely already priced.
+  max_price_move_30d_pct: 20
+  # Themes that are calendar-tracked and saturated within days — auto-reject.
+  excluded_themes:
+    - "token_unlock_calendar"
+    - "etf_flow_tracking"
+    - "generic_distribution_overhang"
+    - "funding_regime_shift_without_specific_catalyst"
+  # Require every thesis to name at least one specialist source whose
+  # COVERAGE exists but whose POSITIONING is silent (see executability).
+  require_positioning_gap: true
+
+novelty_threshold: 0.30
+confidence_threshold: 0.30
+portfolio_confidence_threshold: 0.35
+max_theses_per_domain: 5
+lookback_hours: 168
+# Relaxed mode: pass saturated-headline theses when specific
+# mechanism / catalyst date / instrument leg remains uncrowded.
+filter_mode: "relaxed"

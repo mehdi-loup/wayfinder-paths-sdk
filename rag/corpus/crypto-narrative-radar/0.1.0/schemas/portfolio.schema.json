@@ -1,0 +1,17 @@
+{
+  "title": "narrative-radar-portfolio",
+  "type": "object",
+  "properties": {
+    "positions": {
+      "type": "array"
+    },
+    "instruments": {
+      "type": "object"
+    },
+    "max_notional_usd": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true
+}

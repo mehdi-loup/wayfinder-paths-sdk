@@ -1,0 +1,27 @@
+{
+  "version": "0.1",
+  "last_run_id": "2026-04-17-r2",
+  "last_run_date": "2026-04-17",
+  "theses": [
+    {"thesis_id": "tech-eth-hegota-focil", "confidence": 0.40, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "geo-bitmain-entity-list", "confidence": 0.38, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "struct-r2-002-alpenglow-slip", "confidence": 0.37, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "geo-digital-euro-june-vote", "confidence": 0.36, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "ena-fee-switch-Q3-2026", "confidence": 0.36, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "mica-article48-july1-usdt-enforcement", "confidence": 0.35, "status": "active", "tier": "medium", "in_portfolio": true},
+    {"thesis_id": "reg-2026-04-17-r2-05-eba-mica-article43", "confidence": 0.34, "status": "watchlist"},
+    {"thesis_id": "struct-r2-001-glamsterdam-epbs", "confidence": 0.34, "status": "watchlist"},
+    {"thesis_id": "macro-pt-susde-18jun2026-cascade", "confidence": 0.34, "status": "watchlist"},
+    {"thesis_id": "macro-eigenlayer-slashing-weeth", "confidence": 0.30, "status": "watchlist"},
+    {"thesis_id": "reg-2026-04-17-r2-01-fdic-genius", "confidence": 0.29, "status": "dormant"},
+    {"thesis_id": "reg-2026-04-17-r2-03-bcbs-sco60-recal", "confidence": 0.29, "status": "dormant"},
+    {"thesis_id": "reg-2026-04-17-r2-04-fincen-ppsi-aml", "confidence": 0.26, "status": "dormant"},
+    {"thesis_id": "struct-r2-003-lido-buyback-conditional", "confidence": 0.25, "status": "dormant"},
+    {"thesis_id": "tech-clarity-act-signed-by-eoy", "confidence": 0.25, "status": "dormant"},
+    {"thesis_id": "reg-2026-04-17-r2-02-sec-cftc-nprm", "confidence": 0.24, "status": "retired"},
+    {"thesis_id": "geo-bitfinex-bitcoin-return", "confidence": 0.21, "status": "retired"}
+  ],
+  "run_history": [
+    {"run_id": "2026-04-17-r2", "run_date": "2026-04-17", "scan_theses_raw": 20, "portfolio_count": 6, "notional_usd": 23500, "outcome": "6_medium_tier_positions"}
+  ]
+}

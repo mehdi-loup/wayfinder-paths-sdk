@@ -1,0 +1,13 @@
+name: hedge_found
+description: Checks that quant optimizer output contains at least one combo.
+fixture: fixtures/basic_portfolio.yaml
+agent: quant-optimizer
+assertions:
+  - type: has_keys
+    keys:
+      - top_combos
+      - evaluated_count
+      - null_baseline
+  - type: list_length
+    path: top_combos
+    min: 1

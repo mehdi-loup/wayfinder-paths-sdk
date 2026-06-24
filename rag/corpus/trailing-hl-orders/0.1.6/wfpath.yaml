@@ -1,0 +1,37 @@
+schema_version: "0.1"
+
+slug: trailing-hl-orders
+name: Trailing Orders for Hyperliquid
+version: 0.1.6
+summary: "Hyperliquid does not natively offer trailing orders — this path fills that gap. Adds options for trailing stop-loss, take-profit, and limit-entry exits on top of Hyperliquid. Heads up: a background checker polls on a schedule (default every 5 minutes), so it is NOT a live exchange-native trailing order and can miss action between runs — at higher leverage this raises liquidation risk. A helper, not a full replacement. For limit orders and trailing entries, your agent prompts you before placing the trade; for market orders, your agent places the trade first and prompts you afterwards so the entry isn't delayed. A background checker rides along on your main wallet; no separate strategy wallet needed."
+
+primary_kind: tool
+
+tags:
+  - hyperliquid
+  - trailing
+  - stop-loss
+  - take-profit
+  - risk
+
+components:
+  - id: controller
+    kind: script
+    path: controller.py
+  - id: monitor
+    kind: script
+    path: monitor.py
+  - id: attach
+    kind: script
+    path: attach.py
+
+applet:
+  build_dir: "applet/dist"
+  manifest: "applet/applet.manifest.json"
+
+skill:
+  enabled: true
+  source: generated
+  name: "trailing-hl-orders"
+  description: "Hyperliquid does not natively offer trailing orders — this path adds them on a scheduled background checker (not a live exchange-native trigger). Use when the user is placing or discussing a Hyperliquid trade. Offers to add a trailing stop-loss, trailing take-profit, or trailing entry. Warn users that the checker polls every few minutes so it can miss fast price action between runs, which raises liquidation risk under leverage — prefer Safer mode (live stop parked on HL). For limit orders and trailing entries, prompts BEFORE placement; for market orders, prompts AFTER the fill to avoid delaying the entry. Wires up a background checker on the user's main wallet automatically."
+  instructions: "skill/instructions.md"

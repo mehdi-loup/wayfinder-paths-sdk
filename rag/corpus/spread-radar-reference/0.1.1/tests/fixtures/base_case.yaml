@@ -1,0 +1,41 @@
+name: "base_case"
+output:
+  signal_snapshot:
+    universe_size: 7
+    clusters: 3
+    cluster_stability: 0.74
+    top_pair: "SOL/SUI"
+    current_z_score: 2.1
+  selected_playbook:
+    id: "sol-sui-mean-reversion"
+    score: 0.68
+    spread_type: "ratio"
+    long_leg: "SUI"
+    short_leg: "SOL"
+    half_life_hours: 96
+  candidate_expressions:
+    - id: "sol-sui-ratio"
+      type: "intra_cluster"
+      score: 0.68
+      cointegration_pvalue: 0.02
+      z_score: 2.1
+    - id: "eth-avax-ratio"
+      type: "intra_cluster"
+      score: 0.52
+      cointegration_pvalue: 0.04
+      z_score: 1.3
+  null_state:
+    selected: false
+    reason: "SOL/SUI spread clears the scoring threshold with structural catalyst."
+  risk_checks:
+    passed: true
+    mode: "armed"
+    beta_to_market: 0.18
+    cluster_stable: true
+    data_complete: true
+  job:
+    mode: "armed"
+    armed: true
+    monitor_z_score: true
+    poll_every: 3600
+  next_invalidation: "z_score mean-reverts below 0.5 or correlation breaks below 0.40"

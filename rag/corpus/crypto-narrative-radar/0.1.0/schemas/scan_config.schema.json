@@ -1,0 +1,60 @@
+{
+  "title": "narrative-radar-scan-config",
+  "type": "object",
+  "required": [
+    "domains"
+  ],
+  "properties": {
+    "domains": {
+      "type": "object",
+      "properties": {
+        "geopolitical": {
+          "type": "object"
+        },
+        "macro": {
+          "type": "object"
+        },
+        "regulatory": {
+          "type": "object"
+        },
+        "tech": {
+          "type": "object"
+        },
+        "structural": {
+          "type": "object"
+        }
+      }
+    },
+    "novelty_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "confidence_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "portfolio_confidence_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "max_theses_per_domain": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lookback_hours": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "filter_mode": {
+      "type": "string",
+      "enum": [
+        "relaxed",
+        "strict"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

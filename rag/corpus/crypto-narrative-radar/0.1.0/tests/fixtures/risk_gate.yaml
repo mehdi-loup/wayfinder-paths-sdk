@@ -1,0 +1,28 @@
+name: "risk_gate"
+output:
+  signal_snapshot:
+    domains_scanned: 5
+    new_theses_found: 2
+    existing_theses_updated: 3
+  selected_playbook:
+    id: "narrative-radar-generate"
+    score: 0.58
+  candidate_expressions:
+    - id: "ai-governance-crackdown"
+      type: "polymarket-direct"
+      confidence: 0.61
+      novelty_score: 0.72
+  null_state:
+    selected: false
+    reason: "Thesis is valid but no liquid instruments found for expression."
+  risk_checks:
+    passed: false
+    mode: "draft"
+    theses_above_confidence: 1
+    rejection_reason: "No Polymarket markets with sufficient liquidity, perp exposure too indirect."
+  job:
+    mode: "draft"
+    armed: false
+    thesis_count: 1
+  next_invalidation: "Monitor for new Polymarket markets on AI governance."
+  trade_book: ".wf-artifacts/$RUN_ID/trade_book.md"

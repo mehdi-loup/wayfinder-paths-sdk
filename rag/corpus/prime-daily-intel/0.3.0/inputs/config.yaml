@@ -1,0 +1,32 @@
+tokens:
+  prime_base: "0xfA980cEd6895AC314E7dE34Ef1bFAE90a5AdD21b"
+  prime_eth: "0xb23d80f5FefcDDaa212212F028021B41DEd428CF"
+  weth_eth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+  weth_base: "0x4200000000000000000000000000000000000006"
+
+uniswap_v3:
+  # PRIME/WETH pools on Ethereum (PRIME is token0, WETH is token1)
+  pools:
+    - address: "0x16588709ca8f7B84829B43cC1c5cb7e84a321b16"
+      fee_bps: 30
+      label: "0.30%"
+    - address: "0xCD423F3ab39a11ff1D9208B7D37dF56E902C932B"
+      fee_bps: 100
+      label: "1.00%"
+
+aerodrome:
+  # CL200-WETH/PRIME on Base (active gauge)
+  pool_address: "0x87cd18069b6547a0e88b6155dd657e71779500ea"
+  gauge_address: "0xf9f8138150f67a469fa5437e75ad16eaaab8c09e"
+  label: "CL200-WETH/PRIME"
+
+thresholds:
+  # Alert if Base/ETH spread exceeds this %
+  spread_alert_pct: 2.0
+  # Alert on transfers larger than this many PRIME
+  large_transfer_prime: 50000
+  # Lookback for on-chain pulse (blocks ≈ hours on Base/ETH)
+  pulse_lookback_hours: 24
+  # Minimum Alpha Lab score to include a signal
+  alpha_min_score: 0.5
+  alpha_limit: 5

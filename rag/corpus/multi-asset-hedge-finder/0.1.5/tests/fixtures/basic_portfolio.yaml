@@ -1,0 +1,10 @@
+assets:
+  - symbol: ETH
+    notional_usd: 5000
+    side: long
+  - symbol: BTC
+    notional_usd: 3000
+    side: long
+  - symbol: SOL
+    notional_usd: 2000
+    side: long

@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "7f71d27216adea3ef23f5e505185028b",
+    "path_slug": "kaito-pt-delta-neutral",
+    "version": "0.1.10",
+    "bundle_sha256": "de5633dfe42be2f4388ffcde3dd52d29f00b9feedcb70dbf38b977e4e61148ee",
+    "issued_at": "2026-05-04T17:13:02.862181+00:00",
+    "expires_at": "2026-05-05T17:13:02.862181+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/kaito-pt-delta-neutral/0.1.10",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/kaito-pt-delta-neutral/versions/0.1.10/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/kaito-pt-delta-neutral/versions/0.1.10/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "daYkPuEMTvMbbg87eDu8TAgGyitbMbSIU4Ab8syFGqY"
+}

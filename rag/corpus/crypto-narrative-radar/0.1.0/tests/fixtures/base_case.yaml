@@ -1,0 +1,33 @@
+name: "base_case"
+output:
+  signal_snapshot:
+    domains_scanned: 5
+    new_theses_found: 3
+    existing_theses_updated: 2
+  selected_playbook:
+    id: "narrative-radar-generate"
+    score: 0.68
+  candidate_expressions:
+    - id: "eu-fiscal-fragmentation"
+      type: "perp-directional"
+      confidence: 0.62
+      novelty_score: 0.78
+    - id: "southeast-asia-supply-chain"
+      type: "polymarket-direct"
+      confidence: 0.55
+      novelty_score: 0.85
+  null_state:
+    selected: false
+    reason: "Two theses passed adversarial review with actionable instruments."
+  risk_checks:
+    passed: true
+    mode: "armed"
+    theses_above_confidence: 2
+    avg_novelty: 0.81
+  job:
+    mode: "armed"
+    armed: true
+    thesis_count: 2
+    monitoring_items: 4
+  next_invalidation: "Re-scan in 7 days or on major geopolitical event."
+  trade_book: ".wf-artifacts/$RUN_ID/trade_book.md"

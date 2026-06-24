@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "71b5d8871226c21030972eaf8674cfd3",
+    "path_slug": "multi-asset-hedge-finder",
+    "version": "0.1.5",
+    "bundle_sha256": "d1a913fdd4fb875d629e5a0928e80914250a2eff6aeff42307c52d0ffb1e08c2",
+    "issued_at": "2026-05-04T17:12:51.253941+00:00",
+    "expires_at": "2026-05-05T17:12:51.253941+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/multi-asset-hedge-finder/0.1.5",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/multi-asset-hedge-finder/versions/0.1.5/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/multi-asset-hedge-finder/versions/0.1.5/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "Ym-kUDVmZBDK7ovqJBwfZW35skw5W9AvNyw9NJhCvuQ"
+}

@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "b710c9e6bfd70e0e0586d44bfa237176",
+    "path_slug": "quant-desk",
+    "version": "0.1.5",
+    "bundle_sha256": "7736b64cf4d18c37170aa139b140900b6ed8e3e55547bac90c0635740ac97624",
+    "issued_at": "2026-05-04T17:12:43.889068+00:00",
+    "expires_at": "2026-05-05T17:12:43.889068+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/quant-desk/0.1.5",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/quant-desk/versions/0.1.5/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/quant-desk/versions/0.1.5/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "qLwodTCFI7RYv0L8WbY776GnsWNfgbA5gqVcB-f71nI"
+}

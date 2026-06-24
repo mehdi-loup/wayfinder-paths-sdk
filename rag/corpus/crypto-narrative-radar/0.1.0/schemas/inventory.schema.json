@@ -1,0 +1,16 @@
+{
+  "title": "narrative-radar-inventory",
+  "type": "object",
+  "properties": {
+    "theses": {
+      "type": "array"
+    },
+    "run_history": {
+      "type": "array"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

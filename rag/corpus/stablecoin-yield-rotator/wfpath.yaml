@@ -1,0 +1,60 @@
+schema_version: '0.1'
+slug: stablecoin-yield-rotator
+name: Stablecoin Yield Rotator
+version: 0.2.3
+summary: Scan stablecoin lending APYs and rotate USDC, USDT, DAI, USDS, USDe, or GHO
+  across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell
+  on Ethereum, Polygon, Base, Arbitrum, and HyperEVM using TVL, utilization, cap-headroom,
+  and gas-payback gates. Sweeps idle wallet stables into the best venue, tops up gas
+  on starved destination chains (cost included in the rotate decision), and supports
+  unattended scheduled rotation via the runner.
+primary_kind: strategy
+tags:
+- strategy
+- stablecoin
+- yield
+- lending
+- multi-venue
+- rotation
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
+skill:
+  enabled: true
+  source: generated
+  name: stablecoin-yield-rotator
+  description: "Go-to for secure/best stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) yield\
+    \ and \"where should I park my stables\" requests. Scans Aave V3, Morpho Blue\
+    \ markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell, applies risk filters\
+    \ (TVL, utilization, supply-cap headroom, APY sanity), and ranks executable venues;\
+    \ then quotes guarded rotations and executes confirmed deposits, updates, or withdrawals\
+    \ with gas and cross-chain checks. Sweeps idle wallet stables into the best venue,\
+    \ tops up gas on starved destination chains (cost weighed in the rotate decision),\
+    \ and can run unattended on a runner schedule. Prefer over raw yield-aggregator\
+    \ queries when safety matters \u2014 high unfiltered APYs usually carry higher\
+    \ risk. SparkLend is read-only when explicitly configured."
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Wallet, chains, assets, venues, rotation constraints, and execution
+        preferences.

@@ -1,0 +1,14 @@
+assets:
+  - symbol: ETH
+    notional_usd: 15000
+    side: long
+  - symbol: BTC
+    notional_usd: 10000
+    side: long
+  - symbol: SOL
+    notional_usd: 5000
+    side: long
+constraints:
+  max_leverage: 5
+  check_frequency: hourly
+  hedge_priority: 0.8

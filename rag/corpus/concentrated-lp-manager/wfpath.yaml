@@ -1,0 +1,58 @@
+schema_version: '0.1'
+slug: concentrated-lp-manager
+name: Concentrated LP Manager
+version: 0.1.0
+summary: Open, monitor, rebalance, compound, and close concentrated-liquidity positions
+  on Uniswap V3 and Aerodrome Slipstream with cooldown + daily-cap safety rails.
+primary_kind: strategy
+tags:
+- strategy
+- liquidity
+- uniswap-v3
+- aerodrome
+- slipstream
+- concentrated-liquidity
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+- id: monitor
+  kind: script
+  path: scripts/monitor.py
+- id: attach
+  kind: script
+  path: scripts/attach.py
+skill:
+  enabled: true
+  source: generated
+  name: concentrated-lp-manager
+  description: Open, monitor, rebalance, compound, and close concentrated-liquidity
+    positions on Uniswap V3 and Aerodrome Slipstream with cooldown + daily-cap safety
+    rails.
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Wallet, gas reserve, slippage, default range strategy, rebalance
+        cooldown + daily cap, monitor interval, ledger toggle.
+    pools:
+      type: yaml
+      path: inputs/pools.yaml
+      required: true
+      description: Pool positions to manage. Each entry declares venue, chain, pool
+        address, pair, target USD, and optional per-pool strategy overrides.

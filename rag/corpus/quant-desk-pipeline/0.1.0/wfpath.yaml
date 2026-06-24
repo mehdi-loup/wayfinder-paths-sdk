@@ -1,0 +1,229 @@
+schema_version: '0.1'
+slug: quant-desk-pipeline
+name: Quant Desk Pipeline
+version: 0.1.0
+summary: "Paper-to-trade quant research pipeline. Finds papers on a narrow signal\
+  \ topic, prunes weak methodology, gets a SIMPLE backtest working first, then fits\
+  \ the signal to crypto (grid + experiment + tweak with a train/test split), and\
+  \ optionally stress-tests it (wider window, more tickers, fee tiers). Honest replication-failure\
+  \ reporting \u2014 distinguishes real alpha from regime-specific flukes."
+primary_kind: policy
+tags:
+- quant
+- research
+- replication
+- backtest
+- signals
+- skeptic
+- fitting
+- ccxt
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+skill:
+  enabled: true
+  source: generated
+  name: quant-desk-pipeline
+  description: Paper-to-trade quant research pipeline. Finds academic papers on a
+    narrow signal topic, prunes weak methodology, gets a simple backtest working,
+    then fits the signal to crypto with a train/test split, and optionally stress-tests
+    robustness.
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.8.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+pipeline:
+  archetype: spread-radar
+  graph: pipeline/graph.yaml
+  artifacts_dir: .wf-artifacts
+  entry_command: quant-desk-pipeline
+  primary_hosts:
+  - claude
+  - opencode
+  output_contract:
+  - signal_snapshot
+  - selected_playbook
+  - candidate_expressions
+  - null_state
+  - risk_checks
+  - job
+  - next_invalidation
+inputs:
+  slots:
+    theme:
+      type: markdown
+      path: inputs/theme.md
+      required: true
+      schema: schemas/theme.schema.json
+    universe:
+      type: yaml
+      path: inputs/universe.yaml
+      required: false
+      schema: schemas/universe.schema.json
+    notes:
+      type: markdown
+      path: inputs/notes.md
+      required: false
+      schema: schemas/notes.schema.json
+agents:
+- id: paper-finder
+  phase: discovery
+  description: "Find up to 10 academic papers on the locked topic (arxiv, NBER, journals;\
+    \ never SSRN) AND feasibility-prune them in one pass \u2014 data, compute, claimed\
+    \ value, monetizable frequency (>=15m), novelty. Seed canonical baselines first."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/discovery.json
+  host_mode: worker
+- id: methodology-extractor
+  phase: methodology
+  description: "For each KEEP paper, extract the signal formula, parameters, claimed\
+    \ Sharpe/t-stat, sample, and data requirements from abstract+intro only \u2014\
+    \ never the full PDF."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/methodology.json
+  host_mode: worker
+- id: skeptic
+  phase: skeptic
+  description: "Fatal-flaw filter only, run in isolated context \u2014 reject papers\
+    \ that are underspecified, unimplementable, or lookahead-biased. No quantitative\
+    \ validation here."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/skeptic.json
+  host_mode: worker
+- id: signal-implementer
+  phase: implementation
+  description: Implement each surviving paper's signal as a Python signal_fn at the
+    paper's native frequency, conforming to the signal contract.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/implementation.json
+  host_mode: worker
+- id: universe-builder
+  phase: universe_builder
+  description: Resolve the candidate symbols, fetch CCXT Binance (and Hyperliquid
+    for HL-native) history, and lock the SMALL fitting basket and ~1yr window. Owns
+    the pair_screener pre-screen too.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/universe.json
+  host_mode: worker
+- id: signal-researcher
+  phase: signal_research
+  description: "FIRST PASS \u2014 run one simple backtest at paper-spec params on\
+    \ the fitting basket via scripts/evaluate_signal.py. Confirm the signal runs and\
+    \ is non-degenerate (has variance, trades, no NaNs). Fail-fast only on degenerate\
+    \ output, not on weak thresholds."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/first_pass.json
+  host_mode: worker
+- id: fitting-engineer
+  phase: fitting
+  description: "Iterate to improve the signal and adapt it to crypto \u2014 grid-search\
+    \ params (incl. forward horizon), apply composition/remedial templates, tweak.\
+    \ Use a TRAIN/TEST split inside the fitting window and pick the config by test-side\
+    \ metrics. Bounded by an iteration budget."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/fitting.json
+  host_mode: worker
+- id: robustness-tester
+  phase: robustness
+  description: "OPTIONAL last phase \u2014 take the fitted config and stress it on\
+    \ HELD-OUT data (expand the window incl. a bear regime, expand tickers, sweep\
+    \ fee tiers) to produce a robustness report. If skipped, emit a skipped stub."
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/robustness.json
+  host_mode: worker
+- id: synthesizer
+  phase: synthesis
+  description: Compile the final replication report (PASS / REGIME_DEPENDENT / REJECT
+    per paper) with a mandatory Next-steps section and a durable memory entry.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - write
+  output: .wf-artifacts/$RUN_ID/synthesis.json
+  host_mode: worker
+host:
+  claude:
+    rules_file: .claude/CLAUDE.md
+    skill_dir: .claude/skills
+    agent_dir: .claude/agents
+    settings_file: .claude/settings.json
+  opencode:
+    rules_file: AGENTS.md
+    skill_dir: .opencode/skills
+    agent_dir: .opencode/agents
+    config_file: opencode.json
+    command_dir: .opencode/commands
+    plugin_dir: .opencode/plugins
+    tool_dir: .opencode/tools
+runtime:
+  state_dir: .wf-state
+  tests_dir: tests
+  graph_nodes:
+  - intake
+  - discovery
+  - methodology
+  - skeptic
+  - implementation
+  - universe_builder
+  - pair_screener
+  - signal_research
+  - fitting
+  - robustness
+  - synthesis
+  - finalize

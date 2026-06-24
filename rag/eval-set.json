@@ -1,0 +1,52 @@
+[
+  {
+    "query": "Boros carry backtest funding vs underlying",
+    "expectedSlug": "boros-carry-demo",
+    "note": "Exact keyword match — baseline sanity check"
+  },
+  {
+    "query": "delta neutral strategy using Moonwell and Hyperliquid",
+    "expectedSlug": "virtual-delta-neutral",
+    "note": "Protocol names in tags and summary"
+  },
+  {
+    "query": "how do I convert a macro thesis into a Polymarket trade",
+    "expectedSlug": "conditional-router-reference",
+    "note": "Semantic match — no exact keywords, tests embedding quality"
+  },
+  {
+    "query": "Pendle PT carry selection and NAV tracking",
+    "expectedSlug": "pt-carry-roller-demo",
+    "note": "Domain term: PT (Principal Token), Pendle protocol"
+  },
+  {
+    "query": "policy-driven orchestration with null-state gating",
+    "expectedSlug": "conditional-router-reference",
+    "note": "Exact phrase from summary — should be easy"
+  },
+  {
+    "query": "what paths use an applet for visualization",
+    "expectedSlug": "boros-carry-demo",
+    "note": "Multiple paths have applets; boros is most described. Tests whether similarity still ranks it first or returns noise"
+  },
+  {
+    "query": "risk gate agent that downgrades unsafe actions to draft",
+    "expectedSlug": "conditional-router-reference",
+    "note": "Agent description match — tests chunked agent list retrieval"
+  },
+  {
+    "query": "monitor path with anti-churn cooldown logic",
+    "expectedSlug": "virtual-delta-neutral",
+    "note": "Paraphrase of summary — 6h confirmation and 2-day cooldown"
+  },
+  {
+    "query": "parallel agent spawning in pipeline orchestration",
+    "expectedSlug": "conditional-router-reference",
+    "note": "Instructions chunk: 'Spawn thesis-normalizer, poly-scout, proxy-mapper in parallel'"
+  },
+  {
+    "query": "demo strategy that rolls a fixed-income position by yield",
+    "expectedSlug": "pt-carry-roller-demo",
+    "note": "Semantic abstraction of PT carry — no exact keyword match expected"
+  }
+]

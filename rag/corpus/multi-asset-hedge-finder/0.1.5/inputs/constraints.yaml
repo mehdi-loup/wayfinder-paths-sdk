@@ -1,0 +1,16 @@
+# Hedge constraints applied by the risk gate and optimizer.
+
+hedge_budget_usd: 35000
+max_leverage: 2
+margin_mode: "isolated"
+max_hedge_legs: 4
+min_leg_notional_usd: 200
+max_annual_funding_cost_pct: 20
+lookback_days: 30
+rebalance_frequency: "daily"
+
+# How often you plan to check the hedge.
+# Drives safe leverage via historical backtest: longer intervals → lower leverage.
+# Options: hourly (scripted), daily (manual), weekly (set-and-forget), biweekly (2-week hands-off)
+check_frequency: "daily"
+hedge_priority: 0.5

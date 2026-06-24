@@ -1,0 +1,31 @@
+name: "null_state"
+output:
+  signal_snapshot:
+    universe_size: 7
+    clusters: 2
+    cluster_stability: 0.48
+    top_pair: "eth-sol-ratio"
+    current_z_score: 0.4
+  selected_playbook:
+    id: "null-state"
+    score: 0.0
+  candidate_expressions:
+    - id: "eth-sol-ratio"
+      type: "intra_cluster"
+      score: 0.38
+      cointegration_pvalue: 0.12
+      z_score: 0.4
+  null_state:
+    selected: true
+    reason: "Cluster structure is unstable over the stability window."
+  risk_checks:
+    passed: true
+    mode: "null"
+    beta_to_market: 0.55
+    cluster_stable: false
+    data_complete: true
+  job:
+    mode: "null"
+    armed: false
+    poll_every: 3600
+  next_invalidation: "cluster stability recovers above 0.60"

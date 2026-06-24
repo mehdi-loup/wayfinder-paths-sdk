@@ -1,0 +1,13 @@
+{
+  "title": "narrative-radar-watchlist",
+  "type": "object",
+  "properties": {
+    "watch": {
+      "type": "array"
+    },
+    "ignore": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}

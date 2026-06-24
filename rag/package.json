@@ -1,0 +1,28 @@
+{
+  "name": "day11-rag",
+  "version": "0.1.0",
+  "description": "RAG over Wayfinder Paths using pgvector (Supabase) + Voyage AI embeddings",
+  "type": "module",
+  "main": "./src/search.ts",
+  "exports": {
+    ".": "./src/search.ts"
+  },
+  "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "ingest": "tsx scripts/pipeline.ts",
+    "search": "tsx scripts/query.ts",
+    "eval": "tsx scripts/eval.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "dotenv": "^16.4.0",
+    "ws": "^8.20.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

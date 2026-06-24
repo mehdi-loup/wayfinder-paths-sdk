@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "constraints",
+  "type": "object",
+  "required": ["hedge_budget_usd", "max_leverage"],
+  "properties": {
+    "hedge_budget_usd": { "type": "number", "exclusiveMinimum": 0 },
+    "max_leverage": { "type": "number", "minimum": 1, "maximum": 10 },
+    "margin_mode": { "type": "string", "enum": ["isolated", "cross"], "default": "isolated" },
+    "max_hedge_legs": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 },
+    "min_leg_notional_usd": { "type": "number", "minimum": 0, "default": 100 },
+    "max_annual_funding_cost_pct": { "type": "number", "minimum": 0, "maximum": 100, "default": 25 },
+    "lookback_days": { "type": "integer", "minimum": 7, "maximum": 90, "default": 30 },
+    "rebalance_frequency": { "type": "string", "enum": ["hourly", "daily", "weekly"], "default": "daily" },
+    "check_frequency": {
+      "type": "string",
+      "enum": ["hourly", "daily", "weekly", "biweekly"],
+      "default": "daily",
+      "description": "How often you plan to check the hedge. Drives safe leverage via historical backtest."
+    },
+    "hedge_priority": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5,
+      "description": "0.0 = tightest hedge (max correlation/variance reduction), 1.0 = most profitable (max funding income, looser fit). 0.5 = balanced."
+    }
+  }
+}
