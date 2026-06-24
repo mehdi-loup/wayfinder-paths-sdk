@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -25,14 +26,18 @@ from wayfinder_paths.mcp.polymarket_order import (
     normalize_pm_side,
     validate_pm_market_order_size,
 )
+from wayfinder_paths.mcp.polymarket_relevance import relevance_search
 from wayfinder_paths.mcp.polymarket_summary import (
     DEFAULT_CANDIDATE_LIMIT,
     compact_candidates,
+    compact_category_summary,
+    compact_child_events,
     compact_event,
     compact_event_groups,
     compact_market_detail,
     compact_order_book,
     compact_truncation,
+    event_markets,
     next_suggested_calls,
 )
 from wayfinder_paths.mcp.state.profile_store import WalletProfileStore
@@ -53,6 +58,324 @@ def _adapter_error(payload: Any) -> dict[str, Any]:
         message = str(payload.get("message") or payload.get("error") or payload)
         return err(str(payload.get("code") or "error"), message, payload)
     return err("error", str(payload))
+
+
+def _normalize_pm_lookup_text(value: Any) -> str:
+    return " ".join(
+        "".join(ch.lower() if ch.isalnum() else " " for ch in str(value or "")).split()
+    )
+
+
+def _extract_polymarket_event_slug(value: Any) -> tuple[str | None, bool]:
+    text = str(value or "").strip()
+    if not text:
+        return None, False
+    match = re.search(
+        r"polymarket\.com/(?:[a-z]{2}/)?(?:sports/[^/\s]+/|event/)([a-z0-9][a-z0-9-]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1), True
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", text):
+        return text, False
+    return None, False
+
+
+def _is_polymarket_sports_event(event: dict[str, Any]) -> bool:
+    if event.get("gameId") or event.get("sport"):
+        return True
+    tags = event.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            if not isinstance(tag, dict):
+                continue
+            slug = str(tag.get("slug") or "").lower()
+            if slug in {"sports", "games", "soccer", "fifa-world-cup"}:
+                return True
+    return False
+
+
+async def _polymarket_event_summary(
+    adapter: PolymarketAdapter,
+    *,
+    action: str,
+    slug: str,
+    candidate_limit: int,
+    offset: int = 0,
+    query: str | None = None,
+    exact_event_hydration: bool = False,
+) -> tuple[bool, dict[str, Any]]:
+    ok_e, e = await adapter.get_event_by_slug(slug)
+    if not ok_e:
+        assert isinstance(e, (dict, str))
+        return False, e if isinstance(e, dict) else {"code": "error", "message": str(e)}
+    assert isinstance(e, dict)
+
+    child_events: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    parent_id = str(e.get("id") or "").strip()
+    if parent_id and _is_polymarket_sports_event(e):
+        ok_children, children = await adapter.list_events(
+            parent_event_id=parent_id,
+            limit=50,
+            closed=False,
+        )
+        if ok_children and isinstance(children, list):
+            child_events = [child for child in children if isinstance(child, dict)]
+        elif not ok_children:
+            warnings.append("sports child-event hydration failed; parent markets only")
+
+    parent_markets = event_markets(e, event_slug_override=slug)
+    child_markets = [
+        market
+        for child in child_events
+        for market in event_markets(
+            child, event_slug_override=str(child.get("slug") or "")
+        )
+    ]
+    markets = parent_markets + child_markets
+    candidates, truncation = compact_candidates(
+        markets,
+        candidate_limit,
+        event_slug_override=slug,
+        sort_open_first=True,
+        offset=offset,
+    )
+    payload: dict[str, Any] = {
+        "action": action,
+        "summaryMode": True,
+        "event": compact_event(e),
+        "candidates": candidates,
+        "nextSuggestedCalls": next_suggested_calls(
+            event_slug_value=slug,
+            truncation=truncation,
+        ),
+        "truncation": truncation,
+    }
+    if query is not None:
+        payload["query"] = query
+    if exact_event_hydration:
+        payload["exactEventHydration"] = True
+        payload["eventSlug"] = slug
+    if child_events:
+        payload["sportsBoard"] = {
+            "parentMarketCount": len(parent_markets),
+            "childEventCount": len(child_events),
+            "childMarketCount": len(child_markets),
+            "totalMarketCount": len(markets),
+        }
+        payload["childEvents"] = compact_child_events(child_events)
+        payload["categorySummary"] = compact_category_summary(markets)
+    if warnings:
+        payload["warnings"] = warnings
+    return True, payload
+
+
+def _summary_outcome_token_id(market: dict[str, Any], outcome: str | int) -> str | None:
+    if isinstance(outcome, int):
+        if outcome == 0:
+            return str(market.get("yesTokenId") or "").strip() or None
+        if outcome == 1:
+            return str(market.get("noTokenId") or "").strip() or None
+        return None
+
+    want = _normalize_pm_lookup_text(outcome)
+    yes_label = _normalize_pm_lookup_text(market.get("yesLabel") or "yes")
+    no_label = _normalize_pm_lookup_text(market.get("noLabel") or "no")
+    if want in {"yes", yes_label}:
+        return str(market.get("yesTokenId") or "").strip() or None
+    if want in {"no", no_label}:
+        return str(market.get("noTokenId") or "").strip() or None
+    return None
+
+
+def _market_lookup_score(market: dict[str, Any], query: str) -> float:
+    want = _normalize_pm_lookup_text(query)
+    if not want:
+        return 0.0
+    slug = _normalize_pm_lookup_text(market.get("slug"))
+    question = _normalize_pm_lookup_text(market.get("question") or market.get("title"))
+    event_slug = _normalize_pm_lookup_text(market.get("eventSlug"))
+    haystack = " ".join(part for part in (slug, question, event_slug) if part)
+    if slug == want:
+        return 1.0
+    if want and want in slug:
+        return 0.92
+    if want and want in question:
+        return 0.84
+    tokens = [token for token in want.split() if len(token) > 2]
+    if tokens and haystack:
+        return sum(1 for token in tokens if token in haystack) / len(tokens)
+    return 0.0
+
+
+def _compact_resolution_candidates(
+    markets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    candidates, _ = compact_candidates(markets, min(len(markets), 5) or 5)
+    return candidates
+
+
+async def _resolve_read_token_id(
+    adapter: PolymarketAdapter,
+    *,
+    token_id: str | None,
+    market_slug: str | None,
+    event_slug: str | None,
+    outcome: str | int,
+) -> tuple[bool, dict[str, Any] | str]:
+    """Resolve read-only CLOB actions from token_id or market_slug+outcome.
+
+    Agents often have a compact market row in context and naturally pass
+    market_slug+outcome, mirroring quote/write tools. Support that path here, and
+    do one bounded search for loose slugs so the failure is actionable instead of
+    the opaque CLOB-level "token_id is required".
+    """
+    tid = str(token_id or "").strip()
+    if tid:
+        return True, {"token_id": tid, "resolution": {"source": "token_id"}}
+
+    slug = str(market_slug or "").strip()
+    event = str(event_slug or "").strip()
+    if not slug:
+        return (
+            False,
+            {
+                "code": "token_resolution_required",
+                "message": (
+                    "token_id is required, or pass an exact market_slug plus outcome. "
+                    "If you only have a natural label, call search/get_event first and "
+                    "use outcomes[].tokenId."
+                ),
+            },
+        )
+
+    exact_market_resolution_error: str | None = None
+    ok_m, market = await adapter.get_market_by_slug(slug)
+    if ok_m and isinstance(market, dict):
+        ok_tid, resolved = adapter.resolve_clob_token_id(market=market, outcome=outcome)
+        if ok_tid:
+            return (
+                True,
+                {
+                    "token_id": resolved,
+                    "resolution": {
+                        "source": "market_slug",
+                        "market_slug": market.get("slug") or slug,
+                        "question": market.get("question"),
+                        "outcome": outcome,
+                    },
+                },
+            )
+        exact_market_resolution_error = resolved
+        if "missing clobtokenids" not in str(resolved).lower():
+            return False, {"code": "token_resolution_failed", "message": resolved}
+
+    if event:
+        ok_e, event_payload = await adapter.get_event_by_slug(event)
+        if ok_e and isinstance(event_payload, dict):
+            markets = [
+                item
+                for item in event_payload.get("markets", [])
+                if isinstance(item, dict)
+            ]
+            scored = sorted(
+                ((item, _market_lookup_score(item, slug)) for item in markets),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            if scored and scored[0][1] >= 0.75:
+                market = scored[0][0]
+                ok_tid, resolved = adapter.resolve_clob_token_id(
+                    market=market, outcome=outcome
+                )
+                if ok_tid:
+                    return (
+                        True,
+                        {
+                            "token_id": resolved,
+                            "resolution": {
+                                "source": "event_slug_market_match",
+                                "event_slug": event,
+                                "market_slug": market.get("slug"),
+                                "question": market.get("question"),
+                                "outcome": outcome,
+                                "score": scored[0][1],
+                            },
+                        },
+                    )
+
+    ok_s, rows = await adapter.search_markets(
+        query=slug,
+        limit=5,
+        sort="liquidity",
+        status="active",
+    )
+    if ok_s and isinstance(rows, list):
+        markets = [item for item in rows if isinstance(item, dict)]
+        if event:
+            markets = [item for item in markets if item.get("eventSlug") == event]
+        scored = sorted(
+            ((item, _market_lookup_score(item, slug)) for item in markets),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        best = scored[0] if scored else None
+        second_score = scored[1][1] if len(scored) > 1 else 0.0
+        confident_unique_match = (
+            best
+            and best[1] >= 0.75
+            and (
+                best[1] - second_score >= 0.15
+                or (best[1] >= 0.98 and second_score < 0.98)
+            )
+        )
+        if confident_unique_match:
+            market = best[0]
+            resolved = _summary_outcome_token_id(market, outcome)
+            if resolved:
+                return (
+                    True,
+                    {
+                        "token_id": resolved,
+                        "resolution": {
+                            "source": "search_market_match",
+                            "market_slug": market.get("slug"),
+                            "eventSlug": market.get("eventSlug"),
+                            "question": market.get("question"),
+                            "outcome": outcome,
+                            "score": best[1],
+                        },
+                    },
+                )
+
+        return (
+            False,
+            {
+                "code": "ambiguous_market_slug",
+                "message": (
+                    "Could not confidently resolve market_slug to a token_id. "
+                    "Use one of the returned outcomes[].tokenId values."
+                ),
+                "candidates": _compact_resolution_candidates(markets),
+            },
+        )
+
+    return (
+        False,
+        {
+            "code": "token_resolution_failed",
+            "message": (
+                "Could not resolve market_slug to a token_id. Call search/get_event "
+                "and use outcomes[].tokenId."
+            ),
+            "market_slug": slug,
+            "event_slug": event or None,
+            "exactMarketError": exact_market_resolution_error,
+            "lookupError": rows if not ok_s else None,
+        },
+    )
 
 
 def _annotate(
@@ -238,11 +561,14 @@ async def polymarket_read(
       - `quote`: market-order quote. BUY needs `buy_amount_pusd`; SELL needs
         `sell_amount_shares`. Results include a normalized execution summary.
         Provide `market_slug`+`outcome` OR `token_id`.
-      - `price`: best `BUY`/`SELL` price for a `token_id`.
-      - `order_book`: compact book summary for a `token_id`; pass `summary=False`
+      - `price`: best `BUY`/`SELL` price. Prefer `token_id`; exact
+        `market_slug`+`outcome` is also resolved for read-only lookups.
+      - `order_book`: compact book summary. Prefer `token_id`; exact
+        `market_slug`+`outcome` is also resolved. Pass `summary=False`
         for the raw full book.
       - `price_history`: time series. `interval` ("1h"/"6h"/"1d"/"1w"/"max"), `start_ts`/`end_ts`
-        (unix sec), `fidelity` (denser sampling for tight buckets).
+        (unix sec), `fidelity` (denser sampling for tight buckets). Prefer
+        `token_id`; exact `market_slug`+`outcome` is also resolved.
       - `bridge_status`: pUSD bridge state for an account.
       - `open_orders`: requires Level-2 auth through the wallet hash-signing callback.
 
@@ -296,15 +622,34 @@ async def polymarket_read(
         match action:
             case "search":
                 q = throw_if_empty_str("query is required for search", query)
-                ok_rows, rows = await adapter.search_markets(
-                    query=q,
-                    limit=int(limit),
-                    sort=sort,
-                    status=status,
-                )
-                if not ok_rows:
-                    return _adapter_error(rows)
                 if summary:
+                    exact_slug, strict_exact = _extract_polymarket_event_slug(q)
+                    if exact_slug:
+                        ok_summary, payload = await _polymarket_event_summary(
+                            adapter,
+                            action=action,
+                            slug=exact_slug,
+                            candidate_limit=candidate_limit,
+                            offset=int(offset),
+                            query=q,
+                            exact_event_hydration=True,
+                        )
+                        if ok_summary:
+                            return ok(payload)
+                        if strict_exact:
+                            return _adapter_error(payload)
+
+                    relevance = await relevance_search(
+                        adapter,
+                        query=q,
+                        limit=int(limit),
+                        sort=sort,
+                        status=status,
+                        candidate_limit=candidate_limit,
+                    )
+                    if not relevance.ok:
+                        return _adapter_error(relevance.error)
+                    rows = relevance.rows
                     candidates, truncation = compact_candidates(rows, candidate_limit)
                     event_groups = compact_event_groups(rows)
                     return ok(
@@ -312,6 +657,7 @@ async def polymarket_read(
                             "action": action,
                             "query": q,
                             "summaryMode": True,
+                            "relevance": relevance.metadata,
                             "candidates": candidates,
                             "eventGroups": event_groups,
                             "nextSuggestedCalls": next_suggested_calls(
@@ -321,6 +667,14 @@ async def polymarket_read(
                             "truncation": truncation,
                         }
                     )
+                ok_rows, rows = await adapter.search_markets(
+                    query=q,
+                    limit=int(limit),
+                    sort=sort,
+                    status=status,
+                )
+                if not ok_rows:
+                    return _adapter_error(rows)
                 return ok({"action": action, "query": q, "markets": rows})
 
             case "trending":
@@ -369,30 +723,20 @@ async def polymarket_read(
 
             case "get_event":
                 slug = throw_if_empty_str("event_slug is required", event_slug)
+                if summary:
+                    ok_summary, payload = await _polymarket_event_summary(
+                        adapter,
+                        action=action,
+                        slug=slug,
+                        candidate_limit=candidate_limit,
+                        offset=int(offset),
+                    )
+                    if not ok_summary:
+                        return _adapter_error(payload)
+                    return ok(payload)
                 ok_e, e = await adapter.get_event_by_slug(slug)
                 if not ok_e:
                     return _adapter_error(e)
-                if summary:
-                    markets = [m for m in e.get("markets", []) if isinstance(m, dict)]
-                    candidates, truncation = compact_candidates(
-                        markets,
-                        candidate_limit,
-                        event_slug_override=slug,
-                        sort_open_first=True,
-                    )
-                    return ok(
-                        {
-                            "action": action,
-                            "summaryMode": True,
-                            "event": compact_event(e),
-                            "candidates": candidates,
-                            "nextSuggestedCalls": next_suggested_calls(
-                                event_slug_value=slug,
-                                truncation=truncation,
-                            ),
-                            "truncation": truncation,
-                        }
-                    )
                 return ok({"action": action, "event": e})
 
             case "quote":
@@ -442,14 +786,52 @@ async def polymarket_read(
                 )
 
             case "price":
-                tid = throw_if_empty_str("token_id is required", token_id)
+                ok_tid, resolved = await _resolve_read_token_id(
+                    adapter,
+                    token_id=token_id,
+                    market_slug=market_slug,
+                    event_slug=event_slug,
+                    outcome=outcome,
+                )
+                if not ok_tid:
+                    assert isinstance(resolved, dict)
+                    return err(
+                        str(resolved.get("code") or "token_resolution_failed"),
+                        str(resolved.get("message") or "Could not resolve token_id"),
+                        resolved,
+                    )
+                assert isinstance(resolved, dict)
+                tid = str(resolved["token_id"])
                 ok_p, p = await adapter.get_price(token_id=tid, side=side)
                 if not ok_p:
                     return _adapter_error(p)
-                return ok({"action": action, "token_id": tid, "side": side, "price": p})
+                return ok(
+                    {
+                        "action": action,
+                        "token_id": tid,
+                        "side": side,
+                        "price": p,
+                        "resolution": resolved.get("resolution"),
+                    }
+                )
 
             case "order_book":
-                tid = throw_if_empty_str("token_id is required", token_id)
+                ok_tid, resolved = await _resolve_read_token_id(
+                    adapter,
+                    token_id=token_id,
+                    market_slug=market_slug,
+                    event_slug=event_slug,
+                    outcome=outcome,
+                )
+                if not ok_tid:
+                    assert isinstance(resolved, dict)
+                    return err(
+                        str(resolved.get("code") or "token_resolution_failed"),
+                        str(resolved.get("message") or "Could not resolve token_id"),
+                        resolved,
+                    )
+                assert isinstance(resolved, dict)
+                tid = str(resolved["token_id"])
                 ok_b, b = await adapter.get_order_book(token_id=tid)
                 if not ok_b:
                     return _adapter_error(b)
@@ -459,13 +841,36 @@ async def polymarket_read(
                             "action": action,
                             "token_id": tid,
                             "summaryMode": True,
+                            "resolution": resolved.get("resolution"),
                             "book": compact_order_book(b),
                         }
                     )
-                return ok({"action": action, "token_id": tid, "book": b})
+                return ok(
+                    {
+                        "action": action,
+                        "token_id": tid,
+                        "resolution": resolved.get("resolution"),
+                        "book": b,
+                    }
+                )
 
             case "price_history":
-                tid = throw_if_empty_str("token_id is required", token_id)
+                ok_tid, resolved = await _resolve_read_token_id(
+                    adapter,
+                    token_id=token_id,
+                    market_slug=market_slug,
+                    event_slug=event_slug,
+                    outcome=outcome,
+                )
+                if not ok_tid:
+                    assert isinstance(resolved, dict)
+                    return err(
+                        str(resolved.get("code") or "token_resolution_failed"),
+                        str(resolved.get("message") or "Could not resolve token_id"),
+                        resolved,
+                    )
+                assert isinstance(resolved, dict)
+                tid = str(resolved["token_id"])
                 ok_h, h = await adapter.get_prices_history(
                     token_id=tid,
                     interval=interval,
@@ -475,7 +880,14 @@ async def polymarket_read(
                 )
                 if not ok_h:
                     return _adapter_error(h)
-                return ok({"action": action, "token_id": tid, "history": h})
+                return ok(
+                    {
+                        "action": action,
+                        "token_id": tid,
+                        "resolution": resolved.get("resolution"),
+                        "history": h,
+                    }
+                )
 
             case "bridge_status":
                 ok_s, s = await adapter.bridge_status(address=str(acct))

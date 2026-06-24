@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import difflib
 import math
 import re
+import time
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -12,6 +14,7 @@ from wayfinder_paths.adapters.hyperliquid_adapter.adapter import (
     decode_outcome_encoding,
     outcome_asset_id,
 )
+from wayfinder_paths.core.clients.HyperliquidDataClient import HYPERLIQUID_DATA_CLIENT
 from wayfinder_paths.core.config import CONFIG
 from wayfinder_paths.core.constants.hyperliquid import (
     ARBITRUM_USDC_ADDRESS,
@@ -43,6 +46,34 @@ from wayfinder_paths.mcp.utils import (
     throw_if_not_int,
     throw_if_not_number,
 )
+
+HIP4_DESCRIPTION_CHAR_LIMIT = 300
+HIP4_COMPACT_LARGE_NAMED_OUTCOME_LIMIT = 8
+HIP4_SPORT_TERMS = {"world", "cup", "fifa", "football", "soccer"}
+HIP4_GENERIC_QUERY_TERMS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "by",
+    "cup",
+    "fifa",
+    "football",
+    "for",
+    "game",
+    "in",
+    "match",
+    "of",
+    "on",
+    "soccer",
+    "the",
+    "today",
+    "tomorrow",
+    "tonight",
+    "v",
+    "vs",
+    "world",
+}
 
 
 def _annotate_hl_profile(
@@ -263,6 +294,30 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _time_range_ms(
+    *,
+    lookback_hours: int,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> tuple[int, int]:
+    if start_ms is None and end_ms is None:
+        end = int(time.time() * 1000)
+        hours = max(1, min(int(lookback_hours or 0) or 168, 24 * 365 * 5))
+        return end - hours * 3_600_000, end
+    if start_ms is None or end_ms is None:
+        raise ValueError("Provide both start_ms and end_ms, or neither.")
+    if end_ms <= start_ms:
+        raise ValueError("end_ms must be greater than start_ms.")
+    return int(start_ms), int(end_ms)
+
+
+def _tail_rows(rows: Any, limit: int) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    safe_limit = max(1, min(int(limit or 0) or 500, 10_000))
+    return [row for row in rows[-safe_limit:] if isinstance(row, dict)]
 
 
 def _position_for_coin(user_state: dict[str, Any], coin: str) -> dict[str, Any] | None:
@@ -1902,6 +1957,84 @@ async def hyperliquid_get_trade_asset(label: str, asset_name: str) -> dict[str, 
 
 
 @catch_errors
+async def hyperliquid_get_candles(
+    asset_name: str,
+    interval: str = "1h",
+    lookback_hours: int = 168,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """
+    Fetch historical Hyperliquid perp candles from the backend time-series service.
+
+    asset_name: Hyperliquid coin or canonical market name. Core perps may be
+        passed as "HYPE" or "HYPE-USDC"; HIP-3/dex perps require the dex prefix
+        such as "xyz:SPCX".
+    interval: Candle interval, e.g. "1m", "5m", "15m", "1h", "4h", "1d".
+    lookback_hours: Used when start_ms/end_ms are omitted.
+    start_ms/end_ms: Optional exact UTC millisecond range; provide both or neither.
+    limit: Max rows returned after backend fetch/resampling.
+    """
+    asset = throw_if_empty_str("asset_name is required", asset_name)
+    start, end = _time_range_ms(
+        lookback_hours=lookback_hours,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    response = await HYPERLIQUID_DATA_CLIENT.get_candles_response(
+        asset,
+        start,
+        end,
+        interval,
+    )
+    rows = _tail_rows(response.get("rows"), limit)
+    return ok(
+        {
+            **response,
+            "rows": rows,
+            "row_count": len(rows),
+            "requested_asset_name": asset,
+            "requested_interval": interval,
+        }
+    )
+
+
+@catch_errors
+async def hyperliquid_get_funding_history(
+    asset_name: str,
+    lookback_hours: int = 168,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """
+    Fetch historical Hyperliquid perp funding rows from the backend time-series service.
+
+    asset_name accepts core coins like "HYPE" / "HYPE-USDC" and dex-prefixed
+    markets like "xyz:SPCX".
+    """
+    asset = throw_if_empty_str("asset_name is required", asset_name)
+    start, end = _time_range_ms(
+        lookback_hours=lookback_hours,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    response = await HYPERLIQUID_DATA_CLIENT.get_funding_history_response(
+        asset, start, end
+    )
+    rows = _tail_rows(response.get("rows"), limit)
+    return ok(
+        {
+            **response,
+            "rows": rows,
+            "row_count": len(rows),
+            "requested_asset_name": asset,
+        }
+    )
+
+
+@catch_errors
 async def hyperliquid_search_mid_prices(
     asset_names: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -1967,19 +2100,25 @@ async def hyperliquid_search_market(
         adapter.get_outcome_markets(),
     )
     if not perp_ok:
-        perp_data = {"universe": []}
+        perp_data = [{"universe": []}, []]
     if not spot_ok:
-        spot_data = []
+        spot_data = {}
     if not outcome_ok:
         outcome_data = []
 
     # HIP-3 builder dexes carry a `<dex>:<base>` prefix; core perps don't have
     # a quote suffix, so tack on `-USDC` to render the canonical coin path.
+    perp_meta = (
+        perp_data[0] if isinstance(perp_data, (list, tuple)) and perp_data else {}
+    )
+    perp_universe = perp_meta.get("universe", []) if isinstance(perp_meta, dict) else []
     perps = [
         name if ":" in (name := entry["name"]) else f"{name}-USDC"
-        for entry in perp_data[0]["universe"]
+        for entry in perp_universe
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
     ]
-    spots = list(spot_data)
+    spots = list(spot_data) if isinstance(spot_data, dict) else []
+    outcome_data = outcome_data if isinstance(outcome_data, list) else []
 
     if not query.strip():
         perp_hits = [{"name": p} for p in perps[:limit]]
@@ -2062,5 +2201,304 @@ async def hyperliquid_search_market(
             "perps": perp_hits,
             "spots": spot_hits,
             "outcomes": outcome_hits,
+        }
+    )
+
+
+def _hip4_asset_names(outcomes: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for market in outcomes:
+        if market.get("matched_outcomes"):
+            sides = [
+                side
+                for outcome in market.get("matched_outcomes") or []
+                for side in outcome.get("sides") or []
+            ]
+        elif market.get("class") == "priceBinary":
+            sides = market.get("sides") or []
+        else:
+            sides = [
+                side
+                for outcome in market.get("outcomes") or []
+                for side in outcome.get("sides") or []
+            ]
+        for side in sides:
+            asset_name = side.get("asset_name")
+            if isinstance(asset_name, str) and asset_name.startswith("#"):
+                names.append(asset_name)
+    return list(dict.fromkeys(names))
+
+
+def _hip4_query_terms(query: str) -> tuple[set[str], set[str]]:
+    terms = {
+        alias
+        for token in re.split(r"[^a-z0-9]+", query.lower())
+        if token
+        for alias in MARKET_SEARCH_ALIASES.get(token, {token})
+    }
+    specific_terms = {term for term in terms if term not in HIP4_GENERIC_QUERY_TERMS}
+    return terms, specific_terms
+
+
+def _hip4_text_tokens(text: str) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if token}
+
+
+def _hip4_side_rows(sides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for side in sides:
+        row = {
+            "name": side.get("name"),
+            "asset_name": side.get("asset_name"),
+        }
+        rows.append({key: value for key, value in row.items() if value is not None})
+    return rows
+
+
+def _hip4_market_text(market: dict[str, Any]) -> str:
+    if market.get("class") == "priceBinary":
+        sides = market.get("sides") or []
+    else:
+        sides = [
+            side
+            for outcome in market.get("outcomes") or []
+            for side in outcome.get("sides") or []
+        ]
+    return " ".join(
+        str(part)
+        for part in (
+            market.get("name"),
+            market.get("description"),
+            market.get("underlying"),
+            " ".join(str(side.get("description", "")) for side in sides),
+            " ".join(str(side.get("name", "")) for side in sides),
+        )
+        if part
+    )
+
+
+def _hip4_market_score(
+    market: dict[str, Any],
+    *,
+    terms: set[str],
+    specific_terms: set[str],
+    sports_query: bool,
+) -> float:
+    text = _hip4_market_text(market)
+    text_tokens = _hip4_text_tokens(text)
+    if sports_query and not (text_tokens & HIP4_SPORT_TERMS):
+        return 0.0
+
+    if not terms:
+        return 1.0
+
+    matched = {term for term in terms if term in text_tokens or term in text.lower()}
+    if not matched:
+        return 0.0
+
+    name = str(market.get("name") or "").lower()
+    name_tokens = _hip4_text_tokens(name)
+    specific_in_name = {
+        term for term in specific_terms if term in name_tokens or term in name
+    }
+    specific_in_text = {
+        term for term in specific_terms if term in text_tokens or term in text.lower()
+    }
+    pair_bonus = 2.0 if " vs " in name and len(specific_in_name) >= 2 else 0.0
+    specific_name_bonus = 0.5 * len(specific_in_name)
+    specific_text_bonus = 0.1 * len(specific_in_text)
+    coverage = len(matched) / max(len(terms), 1)
+    return coverage + pair_bonus + specific_name_bonus + specific_text_bonus
+
+
+def _hip4_outcome_matches(
+    outcome: dict[str, Any],
+    *,
+    specific_terms: set[str],
+) -> bool:
+    if not specific_terms:
+        return False
+    name = str(outcome.get("name") or "")
+    tokens = _hip4_text_tokens(name)
+    lower = name.lower()
+    return any(term in tokens or term in lower for term in specific_terms)
+
+
+def _compact_hip4_market(
+    market: dict[str, Any],
+    *,
+    specific_terms: set[str],
+) -> dict[str, Any]:
+    market_class = market.get("class")
+    row: dict[str, Any] = {
+        "class": market_class,
+    }
+    if market.get("name"):
+        row["name"] = market.get("name")
+
+    if market_class == "priceBinary":
+        summary = (
+            f"{market.get('underlying')} >= {market.get('target_price')} "
+            f"at {market.get('expiry')}"
+        )
+        row["summary"] = summary
+        row["matched_outcomes"] = [
+            {
+                "name": str(market.get("underlying") or "Outcome"),
+                "sides": _hip4_side_rows(market.get("sides") or []),
+            }
+        ]
+        row["outcome_count"] = 1
+        row["truncated_outcomes"] = False
+    elif market_class == "priceBucket":
+        thresholds = market.get("price_thresholds") or []
+        row["name"] = row.get("name") or f"{market.get('underlying')} price buckets"
+        row["summary"] = (
+            f"{market.get('underlying')} buckets at {market.get('expiry')} "
+            f"thresholds={thresholds}"
+        )
+        outcomes = market.get("outcomes") or []
+        row["matched_outcomes"] = [
+            {
+                "bucket_index": outcome.get("bucket_index"),
+                "sides": _hip4_side_rows(outcome.get("sides") or []),
+            }
+            for outcome in outcomes
+        ]
+        row["outcome_count"] = len(outcomes)
+        row["truncated_outcomes"] = False
+    else:
+        outcomes = market.get("outcomes") or []
+        matched = [
+            outcome
+            for outcome in outcomes
+            if _hip4_outcome_matches(outcome, specific_terms=specific_terms)
+        ]
+        name = str(market.get("name") or "")
+        is_match_market = " vs " in name.lower()
+        if is_match_market and matched:
+            matched_names = {
+                str(outcome.get("name") or "").lower() for outcome in matched
+            }
+            for outcome in outcomes:
+                outcome_name = str(outcome.get("name") or "")
+                if outcome_name.lower() == "draw" and "draw" not in matched_names:
+                    matched.append(outcome)
+                    break
+        if not matched and len(outcomes) <= HIP4_COMPACT_LARGE_NAMED_OUTCOME_LIMIT:
+            matched = list(outcomes)
+
+        row["summary"] = (
+            f"{name} ({len(outcomes)} outcomes)"
+            if name
+            else f"{len(outcomes)} named outcomes"
+        )
+        row["matched_outcomes"] = [
+            {
+                "name": outcome.get("name"),
+                "sides": _hip4_side_rows(outcome.get("sides") or []),
+            }
+            for outcome in matched
+        ]
+        row["outcome_count"] = len(outcomes)
+        row["truncated_outcomes"] = len(matched) < len(outcomes)
+
+    row["asset_names"] = _hip4_asset_names([row])
+    return row
+
+
+def _truncate_hip4_description_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        next_value = {
+            key: _truncate_hip4_description_fields(item) for key, item in value.items()
+        }
+        description = next_value.get("description")
+        if (
+            isinstance(description, str)
+            and len(description) > HIP4_DESCRIPTION_CHAR_LIMIT
+        ):
+            next_value["description"] = description[
+                :HIP4_DESCRIPTION_CHAR_LIMIT
+            ].rstrip()
+            next_value["description_truncated"] = True
+        return next_value
+    if isinstance(value, list):
+        return [_truncate_hip4_description_fields(item) for item in value]
+    return value
+
+
+def _parse_bool(value: bool | str) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+@catch_errors
+async def hyperliquid_search_hip4(
+    query: str,
+    limit: int = 15,
+    include_details: bool = False,
+) -> dict[str, Any]:
+    """
+    Search only Hyperliquid HIP-4 outcome markets by a simple query string.
+
+    Use this for sports, prediction markets, and "will X happen" searches. It
+    deliberately excludes perps, HIP-3 builder markets, and spot assets so broad
+    sports queries do not return large unrelated asset boards.
+
+    query: A simple string containing market text, for example: world cup, election, bitcoin above.
+    limit: Max HIP-4 outcome markets to return (1-20, default 15).
+    include_details: If true, return the richer market shape with long descriptions capped.
+    """
+    parsed_limit = (
+        optional_int(limit, field_name="limit", min_value=1, max_value=20) or 15
+    )
+    adapter = HyperliquidAdapter()
+    outcome_ok, outcome_data = await adapter.get_outcome_markets()
+    if not outcome_ok:
+        outcome_data = []
+
+    terms, specific_terms = _hip4_query_terms(query)
+    sports_query = bool(terms & HIP4_SPORT_TERMS)
+    if not query.strip():
+        outcomes = outcome_data[:parsed_limit]
+    else:
+        scored = [
+            (
+                market,
+                _hip4_market_score(
+                    market,
+                    terms=terms,
+                    specific_terms=specific_terms,
+                    sports_query=sports_query,
+                ),
+            )
+            for market in outcome_data
+        ]
+        outcomes = [
+            market
+            for market, score_value in sorted(
+                (item for item in scored if item[1] > 0),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:parsed_limit]
+        ]
+
+    parsed_include_details = _parse_bool(include_details)
+    if parsed_include_details:
+        response_outcomes = _truncate_hip4_description_fields(copy.deepcopy(outcomes))
+    else:
+        response_outcomes = [
+            _compact_hip4_market(market, specific_terms=specific_terms)
+            for market in outcomes
+        ]
+    return ok(
+        {
+            "market_type": MARKET_TYPE_HIP4,
+            "query": query,
+            "limit": parsed_limit,
+            "compact": not parsed_include_details,
+            "outcomes": response_outcomes,
+            "asset_names": _hip4_asset_names(response_outcomes),
         }
     )
