@@ -1,0 +1,31 @@
+{
+  "title": "spread-radar-universe",
+  "type": "object",
+  "required": ["symbols"],
+  "properties": {
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2
+    },
+    "filters": {
+      "type": "object",
+      "properties": {
+        "require_perp": {
+          "type": "boolean"
+        },
+        "require_lending": {
+          "type": "boolean"
+        },
+        "min_daily_volume_usd": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

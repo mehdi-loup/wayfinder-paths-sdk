@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "fc31ed996e5698383b58a5253bd27e5a",
+    "path_slug": "crypto-narrative-radar",
+    "version": "0.1.0",
+    "bundle_sha256": "f735a4af85e8e61405a108ca965335fe8b188cbf4392141acba8148395a9cd8c",
+    "issued_at": "2026-06-03T13:33:08.707480+00:00",
+    "expires_at": "2026-06-04T13:33:08.707480+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "663",
+    "install_target": "/Users/mln/Documents/Claude/Projects/Job Hunt/day11-rag/corpus/crypto-narrative-radar/0.1.0",
+    "bundle_url": "https://strategies.wayfinder.ai/api/v1/paths/crypto-narrative-radar/versions/0.1.0/bundle.zip",
+    "applet_url": "https://strategies.wayfinder.ai/api/v1/paths/crypto-narrative-radar/versions/0.1.0/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "IaksHGiTp7GyXMFwBYb3_lxsP9J_n5dCQ5mL4GZpdoE"
+}

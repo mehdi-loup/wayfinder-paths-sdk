@@ -1,0 +1,256 @@
+archetype: conditional-router
+
+# Note: this path runs a narrative-radar-style discovery pipeline (5 domain scans +
+# adversarial chain + portfolio compilation) mapped onto the conditional-router archetype
+# schema for registry compatibility. The sections below (`signals`, `playbooks`, `risk`,
+# `scheduler`) adapt the archetype's required policy surface to this flow.
+
+signals:
+  # The 5 domain scans produce signal artifacts per run. Each is a named signal source
+  # with a declared refresh cadence and minimum quality threshold.
+  - id: geopolitical_scan
+    source: scanner_artifact
+    artifact: .wf-artifacts/$RUN_ID/geopolitical_scan.json
+    refresh_hours: 168
+    min_quality: medium
+  - id: macro_scan
+    source: scanner_artifact
+    artifact: .wf-artifacts/$RUN_ID/macro_scan.json
+    refresh_hours: 168
+    min_quality: medium
+  - id: regulatory_scan
+    source: scanner_artifact
+    artifact: .wf-artifacts/$RUN_ID/regulatory_scan.json
+    refresh_hours: 168
+    min_quality: high
+  - id: tech_scan
+    source: scanner_artifact
+    artifact: .wf-artifacts/$RUN_ID/tech_scan.json
+    refresh_hours: 168
+    min_quality: medium
+  - id: structural_scan
+    source: scanner_artifact
+    artifact: .wf-artifacts/$RUN_ID/structural_scan.json
+    refresh_hours: 168
+    min_quality: medium
+
+playbooks:
+  # The surviving theses map to a single portfolio playbook. `portfolio_strategy`
+  # below contains the full configuration; this block declares it at the archetype
+  # surface so the conditional-router doctor checks pass.
+  - id: portfolio_from_theses
+    description: "Compile surviving theses into a sized portfolio across SDK surfaces"
+    entry: portfolio_strategy
+    min_confidence: 0.35
+    max_notional_usd: 25000
+    allowed_surfaces:
+      - swap
+      - perp
+      - lending
+      - vault
+      - lp
+      - pendle
+      - contract
+      - polymarket
+      - ccxt
+
+risk:
+  # Consolidates the crypto-specific hardened gates and the portfolio-level risk
+  # controls into the archetype's required `risk` block.
+  min_confidence: 0.35
+  max_notional_usd: 25000
+  # Gate floors (derived from R3/R5 learnings).
+  min_catalyst_days: 60
+  max_catalyst_days: 540
+  min_scale_usd: 100000000
+  max_price_move_30d_pct: 20
+  require_executability_tier_A_or_B: true
+  require_positioning_gap: true
+  excluded_themes:
+    - token_unlock_calendar
+    - etf_flow_tracking
+    - generic_distribution_overhang
+    - funding_regime_shift_without_specific_catalyst
+  kill_conditions:
+    - "catalyst_already_fired"
+    - "scale_below_100m_usd"
+    - "30d_abs_price_move_above_20_pct"
+    - "excluded_theme_match"
+
+scheduler:
+  # Recommended run cadence for recurring invocations. The runner honors `interval_hours`.
+  interval_hours: 168
+  timezone: UTC
+  idle_policy: "skip_if_no_new_signals"
+  max_concurrent_runs: 1
+
+
+
+domains:
+  protocol:
+    source_protocol:
+      - category: governance_forums
+        search_patterns:
+          - "{protocol} governance proposal {year}"
+          - "snapshot vote {protocol} fee switch"
+          - "temp check {protocol} tokenomics"
+      - category: mainnet_roadmaps
+        search_patterns:
+          - "{protocol} mainnet upgrade {year}"
+          - "{protocol} hard fork schedule"
+          - "{protocol} TGE date confirmed"
+      - category: developer_disclosures
+        search_patterns:
+          - "{protocol} audit report {year}"
+          - "{protocol} architecture spec"
+
+  defi:
+    source_protocol:
+      - category: collateral_regime
+        search_patterns:
+          - "sUSDe backing composition {year}"
+          - "Ethena reserve fund ratio"
+          - "LRT redemption queue depth"
+      - category: term_structure
+        search_patterns:
+          - "Pendle PT YT expiry cascade"
+          - "Boros fixed-rate dislocation"
+          - "Morpho vault APR divergence"
+      - category: lending_curve
+        search_patterns:
+          - "Aave V4 utilization regime"
+          - "Moonwell collateral factor change"
+          - "Spark CDP cap increase"
+
+  crypto_regulatory:
+    source_protocol:
+      - category: dated_rulemakings
+        search_patterns:
+          - "SEC proposed rule comment deadline {year}"
+          - "CFTC digital asset rule effective date"
+          - "Treasury crypto tax guidance {year}"
+          - "BCBS crypto capital rule consultation"
+      - category: enforcement_patterns
+        search_patterns:
+          - "SEC enforcement digital asset {year}"
+          - "MiCA level 2 RTS implementation"
+          - "HK SFC stablecoin licensing"
+          - "Singapore MAS digital payment token rules"
+      - category: tax_accounting
+        search_patterns:
+          - "IRS 1099-DA digital asset broker"
+          - "FASB crypto fair value rule amendment"
+
+  microstructure:
+    source_protocol:
+      - category: perp_funding
+        search_patterns:
+          - "Hyperliquid funding regime {year}"
+          - "CEX perp basis divergence"
+          - "dated futures roll spread"
+      - category: validator_staking
+        search_patterns:
+          - "validator concentration {protocol}"
+          - "Lido dominance reduction proposal"
+          - "EigenLayer AVS slashing implementation"
+      - category: orderflow_mev
+        search_patterns:
+          - "MEV supply chain change {year}"
+          - "builder market concentration"
+          - "PBS proposer-builder separation upgrade"
+
+# Crypto-specific hardened gates (derived from R3 learnings).
+crypto_gates:
+  min_catalyst_days: 60
+  max_catalyst_days: 540
+  min_scale_usd: 100000000
+  max_price_move_30d_pct: 20
+  excluded_themes:
+    - "token_unlock_calendar"
+    - "etf_flow_tracking"
+    - "generic_distribution_overhang"
+    - "funding_regime_shift_without_specific_catalyst"
+  require_positioning_gap: true
+  # In crypto, "sell-side silence" often means "too small to matter", not "hidden edge".
+  # Use price action as the novelty check instead.
+  novelty_via_price_action: true
+
+verification_protocol:
+  min_tool_calls_per_thesis: 3
+  require_evidence_source_url: true
+  require_currency_check: true
+  recency_window_days: 30
+  min_recent_evidence_per_thesis: 1
+  drop_if_catalyst_already_fired: true
+  # Extra crypto check: confirm the token/protocol has not moved >20% in last 30d.
+  require_price_action_check: true
+
+novelty_gate:
+  mainstream_article_threshold: 40
+  polymarket_volume_threshold_usd: 1000000
+  bank_research_note_threshold: 3
+  search_targets:
+    - "bloomberg.com"
+    - "reuters.com"
+    - "ft.com"
+    - "wsj.com"
+    - "cnbc.com"
+    - "theblock.co"
+    - "coindesk.com"
+    - "blockworks.co"
+  # Crypto-native research desks whose silence does NOT imply edge.
+  # Used to override naive "specialist silent = edge" inference.
+  crypto_research_desks:
+    - "delphidigital.io"
+    - "research.kaiko.com"
+    - "chaoslabs.xyz"
+    - "steakhouse.financial"
+    - "galaxy.com/research"
+  # Relaxed-mode pass criterion: headline-saturated theses still PASS
+  # if the specific mechanism / catalyst date / instrument leg remains uncrowded.
+  relaxed_pass_on_angle: true
+  # If the primary token is up/down >20% in last 30d, kill the thesis
+  # regardless of headline count (crypto pricing is fast).
+  kill_if_price_move_30d_pct_above: 20
+
+adversarial:
+  pre_mortem:
+    prompt: "Assume this thesis is wrong. What is the single most likely reason? Has the catalyst already partially priced in? Is there a competing catalyst that front-runs it?"
+  consensus_audit:
+    prompt: "Find the strongest published argument against this thesis from crypto-native research desks (Delphi, Kaiko, Chaos Labs, Steakhouse, Galaxy) AND from on-chain data."
+  historical_analog:
+    prompt: "Find the closest historical parallel in crypto (prior protocol fork, prior fee switch, prior regulatory rule). Did the thesis materialize, or did info-cycle velocity collapse the edge before entry?"
+
+confidence:
+  initial_score: 0.40
+  supporting_evidence_delta: 0.08
+  contrary_evidence_delta: 0.10
+  precondition_met_delta: 0.10
+  precondition_invalidated_delta: 0.20
+  catalyst_occurred_delta: 0.15
+  catalyst_missed_delta: 0.15
+  staleness_decay_per_run: 0.02
+  dormant_threshold: 0.20
+  escalating_threshold: 0.75
+
+portfolio_strategy:
+  min_confidence: 0.35
+  max_timeline_months: 18
+  instruments:
+    swap: true
+    perp: true
+    lending: true
+    vault: true
+    lp: true
+    pendle: true
+    contract: true
+    polymarket: true
+    ccxt: true
+  max_notional_usd: 25000
+  # Require every portfolio leg to declare an SDK surface from the 10 supported.
+  require_sdk_surface: true
+
+null_state:
+  action: "hold"
+  require_thesis_count_above: 0
+  require_avg_confidence_above: 0.40

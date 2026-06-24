@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "55b38451ccdfe6c53205c5bbbb462ca9",
+    "path_slug": "trailing-hl-orders",
+    "version": "0.1.6",
+    "bundle_sha256": "a9e738a18abe139014c6ca525abcd3289da4939e85334ffaeae4656b90596eda",
+    "issued_at": "2026-05-04T17:12:47.440651+00:00",
+    "expires_at": "2026-05-05T17:12:47.440651+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/trailing-hl-orders/0.1.6",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/trailing-hl-orders/versions/0.1.6/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/trailing-hl-orders/versions/0.1.6/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "8xfbCpV7g80ml0G0FVXbTT6sJx8PZ-az0NUGIxWykGs"
+}

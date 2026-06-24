@@ -1,0 +1,15 @@
+symbols:
+  - HYPE
+  - DYDX
+  - GMX
+  - GNS
+  - AERO
+  - VELO
+  - JUP
+  - DRIFT
+  - VERTEX
+  - RAY
+
+filters:
+  require_perp: true
+  min_daily_volume_usd: 100000

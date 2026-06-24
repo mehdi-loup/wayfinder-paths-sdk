@@ -1,0 +1,43 @@
+nodes:
+  - id: "intake"
+  - id: "exposure_reader"
+  - id: "scout_direct"
+  - id: "scout_broad"
+  - id: "triage"
+  - id: "test"
+  - id: "quant"
+  - id: "critic"
+  - id: "compile_job"
+  - id: "finalize"
+
+edges:
+  - from: "intake"
+    to: "exposure_reader"
+  - from: "exposure_reader"
+    to: "scout_direct"
+  - from: "exposure_reader"
+    to: "scout_broad"
+  - from: "scout_direct"
+    to: "triage"
+  - from: "scout_broad"
+    to: "triage"
+  - from: "triage"
+    to: "test"
+  - from: "test"
+    to: "quant"
+  - from: "quant"
+    to: "critic"
+  - from: "critic"
+    to: "compile_job"
+  - from: "compile_job"
+    to: "finalize"
+
+failure_edges:
+  - from: "critic"
+    on: "insufficient_coverage"
+    to: "scout_broad"
+    max_retries: 1
+  - from: "compile_job"
+    on: "failed"
+    to: "finalize"
+    max_retries: 0

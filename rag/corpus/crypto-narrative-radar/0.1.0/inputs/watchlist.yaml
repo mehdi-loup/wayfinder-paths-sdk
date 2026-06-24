@@ -1,0 +1,10 @@
+watch:
+  # Themes to investigate or track specifically.
+  # - label: "EU fiscal rules enforcement"
+  #   domain: macro
+  #   keywords:
+  #     - "EU fiscal compact"
+  #     - "Italian sovereign debt"
+ignore:
+  # Known themes to exclude (already mainstream).
+  # - "Bitcoin ETF approval"

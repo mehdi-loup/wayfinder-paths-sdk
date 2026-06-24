@@ -1,0 +1,23 @@
+name: "null_state"
+output:
+  signal_snapshot:
+    domains_scanned: 5
+    new_theses_found: 4
+    existing_theses_updated: 0
+  selected_playbook:
+    id: "null-state"
+    score: 0.30
+  candidate_expressions: []
+  null_state:
+    selected: true
+    reason: "All candidate theses were killed by the novelty gate (already mainstream) or rejected by adversarial review."
+  risk_checks:
+    passed: true
+    mode: "null"
+    theses_above_confidence: 0
+  job:
+    mode: "null"
+    armed: false
+    thesis_count: 0
+  next_invalidation: "Re-scan in 7 days."
+  trade_book: ".wf-artifacts/$RUN_ID/trade_book.md"

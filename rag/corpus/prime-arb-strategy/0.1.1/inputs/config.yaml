@@ -1,0 +1,22 @@
+tokens:
+  prime_eth: "0xb23d80f5FefcDDaa212212F028021B41DEd428CF"
+  prime_base: "0xfA980cEd6895AC314E7dE34Ef1bFAE90a5AdD21b"
+  weth_eth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+  weth_base: "0x4200000000000000000000000000000000000006"
+
+uniswap_v3:
+  pool_address: "0x16588709ca8f7B84829B43cC1c5cb7e84a321b16"  # PRIME/WETH 0.30%
+
+aerodrome:
+  pool_address: "0x87cd18069b6547a0e88b6155dd657e71779500ea"  # CL200-WETH/PRIME
+
+execution:
+  trade_size_usd: 1000
+  min_gross_spread_pct: 1.9
+  check_interval_seconds: 60
+  max_trade_size_pct_tvl: 0.01
+  gas_limit_eth_usd: 12.0
+
+rebalancing:
+  threshold_pct: 20
+  min_bridge_usd: 200

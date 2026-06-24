@@ -1,0 +1,44 @@
+schema_version: '0.1'
+slug: prime-arb-strategy
+name: PRIME Cross-Chain Arbitrage
+version: 0.1.1
+summary: Pre-positioned cross-chain arbitrage for PRIME between Ethereum (Uniswap
+  V3) and Base (Aerodrome). Executes when the price spread exceeds gas and fee costs.
+primary_kind: strategy
+tags:
+- prime
+- arbitrage
+- cross-chain
+- execution
+- uniswap
+- aerodrome
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+skill:
+  enabled: true
+  source: generated
+  name: prime-arb-strategy
+  description: 'PRIME cross-chain arbitrage: monitors the Ethereum/Base price spread
+    and executes pre-positioned swaps when the spread exceeds fees and gas.'
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Pool addresses, trade size, spread threshold, and gas ceiling.

@@ -1,0 +1,33 @@
+nodes:
+  - id: "intake"
+  - id: "universe_builder"
+  - id: "pair_screener"
+  - id: "signal_research"
+  - id: "skeptic"
+  - id: "finalize"
+
+edges:
+  - from: "intake"
+    to: "universe_builder"
+  - from: "universe_builder"
+    to: "pair_screener"
+  - from: "pair_screener"
+    to: "signal_research"
+  - from: "signal_research"
+    to: "skeptic"
+  - from: "skeptic"
+    to: "finalize"
+
+failure_edges:
+  - from: "universe_builder"
+    on: "insufficient_data"
+    to: "finalize"
+    max_retries: 0
+  - from: "pair_screener"
+    on: "no_pairs"
+    to: "finalize"
+    max_retries: 0
+  - from: "signal_research"
+    on: "no_edge"
+    to: "skeptic"
+    max_retries: 0

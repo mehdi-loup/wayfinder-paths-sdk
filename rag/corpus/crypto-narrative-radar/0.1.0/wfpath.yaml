@@ -1,0 +1,280 @@
+schema_version: '0.1'
+slug: crypto-narrative-radar
+name: Crypto Narrative Radar
+version: 0.1.0
+summary: "Discover uncrowded crypto-native narratives with catalyst \u226560 days,\
+  \ $100M+ scale, and verified executability via the SDK"
+primary_kind: policy
+tags:
+- policy
+- crypto
+- narrative-radar
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
+skill:
+  enabled: true
+  source: generated
+  name: crypto-narrative-radar
+  description: "Discover uncrowded crypto-native narratives with catalyst \u226560\
+    \ days, $100M+ scale, and verified executability via the SDK"
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.7.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+pipeline:
+  archetype: conditional-router
+  graph: pipeline/graph.yaml
+  artifacts_dir: .wf-artifacts
+  entry_command: narrative-radar
+  primary_hosts:
+  - claude
+  - opencode
+  output_contract:
+  - signal_snapshot
+  - selected_playbook
+  - candidate_expressions
+  - null_state
+  - risk_checks
+  - job
+  - next_invalidation
+  - trade_book
+inputs:
+  slots:
+    scan_config:
+      type: yaml
+      path: inputs/scan_config.yaml
+      required: true
+      schema: schemas/scan_config.schema.json
+    inventory:
+      type: json
+      path: inputs/inventory.json
+      required: false
+      schema: schemas/inventory.schema.json
+    portfolio:
+      type: yaml
+      path: inputs/portfolio.yaml
+      required: false
+      schema: schemas/portfolio.schema.json
+    watchlist:
+      type: yaml
+      path: inputs/watchlist.yaml
+      required: false
+      schema: schemas/watchlist.schema.json
+agents:
+- id: geopolitical-analyst
+  phase: geopolitical_scan
+  description: 'Research crypto-adjacent real-world events with dated catalysts: mining-jurisdiction
+    sanctions, nation-state CBDC milestones, seized-crypto-asset policy, export-control
+    actions affecting ASIC supply. Crypto-native lens, not generic geopolitics.'
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/geopolitical_scan.json
+  host_mode: worker
+- id: macro-strategist
+  phase: macro_scan
+  description: 'Research DeFi macro: stablecoin collateral regime shifts, LRT/restaking
+    structural changes, Pendle PT/YT term-structure dislocations, lending-market cap
+    binaries. Dated resolutions required.'
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/macro_scan.json
+  host_mode: worker
+- id: regulatory-tracker
+  phase: regulatory_scan
+  description: 'Track crypto-specific rule-makings with dated comment windows: SEC/CFTC/Treasury/BCBS,
+    IRS 1099-DA, FASB 350-60, MiCA Level 2 RTS, HK-SFC, SG-MAS. Cite specific filing
+    numbers or effective dates.'
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/regulatory_scan.json
+  host_mode: worker
+- id: tech-scout
+  phase: tech_scan
+  description: Research crypto protocol architecture changes, tokenomics updates (fee
+    switches, buybacks, emissions), governance binaries, and dated mainnet milestones
+    with catalysts 60-540 days out.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/tech_scan.json
+  host_mode: worker
+- id: structural-analyst
+  phase: structural_scan
+  description: 'Research crypto market microstructure structural shifts: ETF creation/redemption
+    regime changes, MEV supply-chain upgrades, validator/staking concentration binaries.
+    Tie to specific venue instruments.'
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/structural_scan.json
+  host_mode: worker
+- id: thesis-synthesizer
+  phase: thesis_synthesis
+  description: Merge domain scan outputs, deduplicate theses, reconcile cross-domain
+    reinforcement, and apply confidence updates to the existing inventory.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/thesis_synthesis.json
+  host_mode: worker
+- id: novelty-gate
+  phase: novelty_gate
+  description: Filter out theses that are already mainstream by checking coverage
+    volume in major financial media and existing Polymarket market liquidity.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/novelty_gate.json
+  host_mode: worker
+- id: pre-mortem-analyst
+  phase: pre_mortem
+  description: For each surviving thesis, assume it is wrong and construct the most
+    likely failure scenario to expose weak causal chains and confirmation bias.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/pre_mortem.json
+  host_mode: worker
+- id: consensus-auditor
+  phase: consensus_audit
+  description: Search for contrarian takes on each thesis, find the strongest counter-arguments,
+    and flag theses where the consensus view contradicts the thesis.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/consensus_audit.json
+  host_mode: worker
+- id: historical-analogist
+  phase: historical_analog
+  description: Find the closest historical parallel for each thesis, evaluate what
+    happened, and assess whether the base rate supports the thesis materializing.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/historical_analog.json
+  host_mode: worker
+- id: portfolio-strategist
+  phase: portfolio_strategy
+  description: For validated theses, map to tradeable instruments on Polymarket and
+    Hyperliquid, define transmission mechanisms, and propose trade structures with
+    monitoring triggers.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  - webfetch
+  - websearch
+  output: .wf-artifacts/$RUN_ID/portfolio_strategy.json
+  host_mode: worker
+- id: inventory-compiler
+  phase: compile_inventory
+  description: Compile the final thesis inventory with confidence trajectories, evidence
+    logs, portfolio actions, and monitoring checklists for persistence across runs.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/inventory.json
+  host_mode: worker
+- id: display-composer
+  phase: display_compose
+  description: Transform the compiled inventory into a display-ready applet data bundle
+    with human-readable summaries, plain-English descriptions, editorial tags, and
+    computed layout hints.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/display.json
+  host_mode: worker
+host:
+  claude:
+    rules_file: .claude/CLAUDE.md
+    skill_dir: .claude/skills
+    agent_dir: .claude/agents
+    settings_file: .claude/settings.json
+  opencode:
+    rules_file: AGENTS.md
+    skill_dir: .opencode/skills
+    agent_dir: .opencode/agents
+    config_file: opencode.json
+    command_dir: .opencode/commands
+    plugin_dir: .opencode/plugins
+    tool_dir: .opencode/tools
+runtime:
+  state_dir: .wf-state
+  tests_dir: tests
+  graph_nodes:
+  - intake
+  - geopolitical_scan
+  - macro_scan
+  - regulatory_scan
+  - tech_scan
+  - structural_scan
+  - thesis_synthesis
+  - novelty_gate
+  - pre_mortem
+  - consensus_audit
+  - historical_analog
+  - portfolio_strategy
+  - compile_inventory
+  - display_compose
+  - finalize

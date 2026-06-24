@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "85fbc55c3680ce6afe45511fa56cd631",
+    "path_slug": "prime-arb-strategy",
+    "version": "0.1.1",
+    "bundle_sha256": "efdd22775deb0a81bc501732608d7b555132d1266247440f064d6ea4766e9e9e",
+    "issued_at": "2026-05-04T17:12:36.465406+00:00",
+    "expires_at": "2026-05-05T17:12:36.465406+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/prime-arb-strategy/0.1.1",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/prime-arb-strategy/versions/0.1.1/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/prime-arb-strategy/versions/0.1.1/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "kfhZL75RauhXNV5WvYOfmLnEwYTxs_RnP-BuB-NplI4"
+}

@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "813f41c9aa757da97ef16218758f968d",
+    "path_slug": "echelon-prime-lp-strategy",
+    "version": "0.1.4",
+    "bundle_sha256": "3b3857cbdfb093be7b6ac4a75514d55d3b90262202bb45e425a551018c5f746e",
+    "issued_at": "2026-05-04T17:12:32.799357+00:00",
+    "expires_at": "2026-05-05T17:12:32.799357+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/echelon-prime-lp-strategy/0.1.4",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/echelon-prime-lp-strategy/versions/0.1.4/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/echelon-prime-lp-strategy/versions/0.1.4/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "HwTDD-j0Due2R2xM3r_LNIkVP_dL0VJvzgavz_OMIfs"
+}

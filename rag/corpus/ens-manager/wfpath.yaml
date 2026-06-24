@@ -1,0 +1,45 @@
+schema_version: '0.1'
+slug: ens-manager
+name: ENS Manager
+version: 0.1.4
+summary: 'Manage ENS names: check availability, register, renew, transfer ownership,
+  set text/address records, create subnames, and set primary name on L2 (Base, Optimism,
+  Arbitrum).'
+primary_kind: strategy
+tags:
+- ens
+- ethereum
+- base
+- l2
+- identity
+- naming
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+skill:
+  enabled: true
+  source: generated
+  name: ens-manager
+  description: 'Manage ENS names: check, register, renew, transfer, set records, create
+    subnames, set primary name on L2.'
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Wallet label, default chain, and ENS contract addresses.

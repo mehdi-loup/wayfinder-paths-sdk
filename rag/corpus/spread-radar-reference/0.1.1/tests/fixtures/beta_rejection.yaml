@@ -1,0 +1,33 @@
+name: "beta_rejection"
+output:
+  signal_snapshot:
+    universe_size: 7
+    clusters: 3
+    cluster_stability: 0.71
+    top_pair: "apt-near-ratio"
+    current_z_score: 1.8
+  selected_playbook:
+    id: "null-state"
+    score: 0.0
+  candidate_expressions:
+    - id: "apt-near-ratio"
+      type: "intra_cluster"
+      score: 0.61
+      cointegration_pvalue: 0.03
+      z_score: 1.8
+      beta_to_market: 0.82
+  null_state:
+    selected: true
+    reason: "Best candidate is hidden directional beta (R-squared 0.82 to market factor)."
+  risk_checks:
+    passed: false
+    mode: "null"
+    beta_to_market: 0.82
+    cluster_stable: true
+    data_complete: true
+    rejection_reason: "Spread return profile is >70% explained by market beta."
+  job:
+    mode: "null"
+    armed: false
+    poll_every: 3600
+  next_invalidation: "beta_to_market drops below 0.50 on re-clustering"

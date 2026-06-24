@@ -1,0 +1,48 @@
+schema_version: '0.1'
+slug: prime-daily-intel
+name: PRIME Daily Intel
+version: 0.3.0
+summary: 'Daily snapshot for the $PRIME token: price momentum, cross-chain spread,
+  Uniswap V3 liquidity on Ethereum, Aerodrome LP health on Base, Alpha Lab signals,
+  and on-chain large-transfer pulse.'
+primary_kind: monitor
+tags:
+- prime
+- monitor
+- defi
+- uniswap
+- aerodrome
+- daily
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
+skill:
+  enabled: true
+  source: generated
+  name: prime-daily-intel
+  description: 'PRIME token daily intelligence report: price, cross-chain spread,
+    Uniswap V3 pools, Aerodrome LP, Alpha Lab signals, on-chain pulse.'
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Token addresses, alert thresholds, and chain config.
