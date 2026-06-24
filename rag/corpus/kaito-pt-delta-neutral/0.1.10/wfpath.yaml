@@ -1,0 +1,28 @@
+schema_version: '0.1'
+slug: kaito-pt-delta-neutral
+name: KAITO PT Delta-Neutral Carry
+version: 0.1.10
+summary: Earn fixed yield on KAITO while hedging price risk. Combines a Pendle PT-sKAITO
+  position with a Hyperliquid short to stay market-neutral.
+primary_kind: monitor
+tags:
+- kaito
+- pendle
+- pt
+- delta-neutral
+- hyperliquid
+- carry
+components:
+- id: pt-delta-neutral-backtest
+  kind: script
+  path: scripts/pt_delta_neutral_backtest.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
+skill:
+  enabled: true
+  source: generated
+  name: kaito-pt-delta-neutral
+  description: Inspect the KAITO PT delta-neutral carry strategy, run backtests, and
+    monitor live rates.
+  instructions: skill/instructions.md

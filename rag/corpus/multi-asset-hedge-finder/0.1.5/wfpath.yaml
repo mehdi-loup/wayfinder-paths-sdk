@@ -1,0 +1,176 @@
+schema_version: '0.1'
+slug: multi-asset-hedge-finder
+name: Hedge Finder
+version: 0.1.5
+summary: 'Agentic hedge finder: scouts discover hedge candidates via direct match,
+  basis, and correlation; testers evaluate cointegration and blowout risk; quant optimizes
+  combos; critic validates or requests broader search. Returns a monitorable rebalance
+  job.'
+primary_kind: policy
+tags:
+- hedge-finder
+- hedging
+- perps
+- delta-neutral
+- portfolio
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
+skill:
+  enabled: true
+  source: generated
+  name: hedge-finder
+  description: Portfolio exposure analysis and Hyperliquid perp hedge recommendation
+    with rebalance job compilation.
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.8.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+pipeline:
+  archetype: hedge-finder
+  graph: pipeline/graph.yaml
+  artifacts_dir: .wf-artifacts
+  entry_command: hedge-finder
+  primary_hosts:
+  - claude
+  - opencode
+  output_contract:
+  - signal_snapshot
+  - selected_playbook
+  - candidate_expressions
+  - null_state
+  - risk_checks
+  - job
+  - next_invalidation
+inputs:
+  slots:
+    assets:
+      type: yaml
+      path: inputs/assets.yaml
+      required: true
+      schema: schemas/assets.schema.json
+      description: 'Portfolio holdings: symbols, notional USD, and optional chain/venue
+        hints.'
+    constraints:
+      type: yaml
+      path: inputs/constraints.yaml
+      required: true
+      schema: schemas/constraints.schema.json
+      description: Risk limits, hedge budget, leverage caps, and liquidity floors.
+agents:
+- id: exposure-reader
+  phase: exposure_reader
+  description: Resolve symbols, fetch hourly time series, build portfolio returns.
+    Handle mixed-history portfolios.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/exposure_reader.json
+  host_mode: worker
+- id: scout-direct
+  phase: scout_direct
+  description: Find direct basis matches for each portfolio asset on Hyperliquid.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/candidates_direct.json
+  host_mode: worker
+- id: scout-broad
+  phase: scout_broad
+  description: Screen the broad Hyperliquid perp universe for correlated proxy hedges.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/candidates_broad.json
+  host_mode: worker
+- id: test-evaluator
+  phase: test
+  description: Cointegration, half-life, funding analysis, and blowout scoring for
+    hedge candidates.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/test_results.json
+  host_mode: worker
+- id: quant-optimizer
+  phase: quant
+  description: Build and rank hedge combos. Compute hedge ratios, variance reduction,
+    leverage, cost/tightness tradeoffs.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/quant_results.json
+  host_mode: worker
+- id: critic
+  phase: critic
+  description: 'Validate hedges against policy and null baseline. Verdict: armed,
+    draft, null, or retry.'
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/critic_verdict.json
+  host_mode: worker
+- id: job-compiler
+  phase: compile_job
+  description: Compile the selected hedge into a draft or armed rebalance job with
+    monitoring rules.
+  tools:
+  - read
+  - glob
+  - grep
+  - bash
+  output: .wf-artifacts/$RUN_ID/job.json
+  host_mode: worker
+host:
+  claude:
+    rules_file: .claude/CLAUDE.md
+    skill_dir: .claude/skills
+    agent_dir: .claude/agents
+    settings_file: .claude/settings.json
+  opencode:
+    rules_file: AGENTS.md
+    skill_dir: .opencode/skills
+    agent_dir: .opencode/agents
+    config_file: opencode.json
+    command_dir: .opencode/commands
+    plugin_dir: .opencode/plugins
+    tool_dir: .opencode/tools
+runtime:
+  state_dir: .wf-state
+  tests_dir: tests
+  graph_nodes:
+  - intake
+  - exposure_reader
+  - scout_direct
+  - scout_broad
+  - triage
+  - test
+  - quant
+  - critic
+  - compile_job
+  - finalize

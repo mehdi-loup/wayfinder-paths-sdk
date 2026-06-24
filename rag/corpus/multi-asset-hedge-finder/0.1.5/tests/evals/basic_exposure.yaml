@@ -1,0 +1,16 @@
+name: basic_exposure
+description: Checks that exposure_reader output has the expected shape.
+fixture: fixtures/basic_portfolio.yaml
+agent: exposure-reader
+assertions:
+  - type: has_keys
+    keys:
+      - assets
+      - portfolio_ann_vol
+      - factor_betas
+      - model_r2
+      - insufficient_symbols
+      - unavailable_symbols
+  - type: list_length
+    path: assets
+    min: 1

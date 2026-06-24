@@ -1,0 +1,65 @@
+archetype: hedge-finder
+
+signals:
+  portfolio_return:
+    source: "delta_lab"
+    series: "price"
+    lookback_days: 30
+    resolution: "hourly"
+  perp_funding:
+    source: "delta_lab"
+    series: "funding"
+    lookback_days: 30
+    resolution: "hourly"
+  perp_oi:
+    source: "delta_lab"
+    screen: "perp"
+    sort: "oi_now"
+    min_oi_usd: 500000
+
+decision:
+  # Minimum variance reduction vs unhedged to accept the hedge
+  min_variance_reduction_pct: 3
+  # Minimum R² of the hedge regression to trust the model
+  min_hedge_r2: 0.30
+  # Maximum annual funding cost as pct of hedged notional
+  max_annual_funding_cost_pct: 25
+  # Maximum number of perps in the hedge basket
+  max_hedge_legs: 5
+  # Minimum per-leg notional to avoid dust positions
+  min_leg_notional_usd: 100
+  # Reject if hedge residual vol exceeds this fraction of unhedged vol
+  max_residual_vol_ratio: 0.95
+  # Reject hedges where directional bias exceeds this (anti-disguised-trade)
+  max_net_beta: 0.15
+  # Soft penalty: reject combos where blowout score falls below this floor
+  min_blowout_score: 0.30
+  # Soft penalty: flag legs whose notional exceeds this fraction of market OI (when OI is known)
+  max_position_oi_fraction: 0.02
+  # Penalize perps with funding volatility above this threshold
+  max_funding_std_30d: 0.0005
+
+risk:
+  max_notional_usd: 50000
+  max_leverage: 3
+  margin_mode: "isolated"
+  max_daily_loss_pct: 5
+  max_annual_funding_drag_pct: 30
+  min_perp_oi_usd: 500000
+  min_perp_24h_volume_usd: 250000
+  max_spread_bps: 50
+
+leverage_backtest:
+  # Margin usage threshold before blowout (from basis strategy)
+  stop_frac: 0.75
+  # Fee buffer in margin calc
+  fee_eps: 0.003
+
+null_state:
+  action: "hold"
+  reason: "No hedge materially improves risk-adjusted portfolio over doing nothing."
+
+scheduler:
+  poll_seconds: 3600
+  rebalance_cooldown_seconds: 86400
+  drift_threshold_pct: 20

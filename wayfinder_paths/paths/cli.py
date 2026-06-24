@@ -13,11 +13,17 @@ from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import click
 
-from wayfinder_paths.paths.builder import PathBuilder, PathBuildError, _sha256_file
+from wayfinder_paths.paths.builder import (
+    _ZIP_TIMESTAMP,
+    PathBuilder,
+    PathBuildError,
+    _is_ignored_file,
+    _sha256_file,
+)
 from wayfinder_paths.paths.client import PathsApiClient, PathsApiError
 from wayfinder_paths.paths.doctor import PathDoctorError, PathDoctorReport, run_doctor
 from wayfinder_paths.paths.evaluator import PathEvalError, run_path_eval
@@ -225,13 +231,20 @@ def _skill_export_warning_strings(report: PathDoctorReport) -> list[str]:
 
 
 def _zip_skill_export_dir(export_dir: Path) -> bytes:
+    # Normalize entries the same way PathBuilder does (fixed timestamp + perms,
+    # junk filtered) so the skill archive is reproducible — the upload must match
+    # a server-side rebuild for archive-policy verification to pass.
     buf = io.BytesIO()
-    with ZipFile(buf, "w") as zf:
+    with ZipFile(buf, "w", compression=ZIP_DEFLATED) as zf:
         for path in sorted(export_dir.rglob("*")):
-            if not path.is_file():
+            if not path.is_file() or _is_ignored_file(path):
                 continue
-            arcname = Path("skill") / path.relative_to(export_dir)
-            zf.write(path, arcname.as_posix())
+            arcname = (Path("skill") / path.relative_to(export_dir)).as_posix()
+            info = ZipInfo(arcname, date_time=_ZIP_TIMESTAMP)
+            info.compress_type = ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, path.read_bytes())
     return buf.getvalue()
 
 

@@ -1,0 +1,72 @@
+archetype: spread-radar
+
+universe:
+  default_theme: "L1 gas tokens"
+  seed_symbols:
+    - ETH
+    - SOL
+    - AVAX
+    - NEAR
+    - SUI
+    - APT
+    - HYPE
+  min_assets: 4
+  max_assets: 20
+  require_perp: true
+  require_lending: false
+
+features:
+  series:
+    - kind: "price"
+      lookback_days: 60
+      frequency: "1h"
+    - kind: "funding"
+      lookback_days: 30
+      frequency: "1h"
+    - kind: "lending_supply_apy"
+      lookback_days: 30
+      frequency: "1d"
+  derived:
+    - kind: "log_return"
+      window: 24
+    - kind: "rolling_corr"
+      window: 168
+    - kind: "z_score"
+      window: 336
+
+clustering:
+  method: "hierarchical"
+  distance_metric: "correlation"
+  linkage: "ward"
+  min_cluster_size: 2
+  stability_lookback_days: 14
+  stability_threshold: 0.60
+  max_clusters: 6
+
+candidate_rules:
+  pair_sources:
+    - "intra_cluster"
+    - "cross_cluster_outlier"
+  spread_type: "ratio"
+  min_half_life_hours: 12
+  max_half_life_hours: 720
+  min_observations: 100
+  require_cointegration_pvalue: 0.05
+  max_candidates: 10
+
+scoring:
+  weights:
+    edge_sharpness: 0.30
+    beta_residual: 0.25
+    stability: 0.20
+    liquidity: 0.15
+    catalyst: 0.10
+  require_score_above: 0.55
+
+null_state:
+  action: "hold"
+  require_score_above: 0.55
+  reasons:
+    - "No pair clears cointegration threshold."
+    - "All candidates are hidden directional beta."
+    - "Cluster structure is unstable over the stability window."

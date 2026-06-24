@@ -1,0 +1,16 @@
+holdings:
+  - symbol: "ETH"
+    notional_usd: 2000
+    side: "long"
+  - symbol: "DOGE"
+    notional_usd: 2000
+    side: "long"
+  - symbol: "BNKR"
+    notional_usd: 2000
+    side: "long"
+  - symbol: "VVV"
+    notional_usd: 2000
+    side: "long"
+  - symbol: "PRIME"
+    notional_usd: 2000
+    side: "long"

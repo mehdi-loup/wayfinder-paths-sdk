@@ -1,0 +1,21 @@
+wallet:
+  label: main  # Label in your config.json (needs PRIME + WETH on Ethereum)
+
+position:
+  lower_pct: 25        # % below current price for the lower bound (e.g. 25 = -25%)
+  upper_pct: 25        # % above current price for the upper bound (e.g. 25 = +25%)
+  prime_amount: 100    # Max PRIME to deposit (actual may be less based on ratio)
+  weth_amount: 0.05    # Max WETH to deposit (actual may be less based on ratio)
+  slippage_bps: 300    # 3% — recommended for volatile/exotic pairs on 1% fee tier
+
+echelon:
+  owner_wallet: ""     # Your wallet address for dashboard lookup (can be read-only)
+
+monitoring:
+  check_interval_seconds: 3600  # 1 hour — out-of-range is a slow event at ±25% range
+
+rebalance:
+  enabled: true
+  momentum_threshold_pct: 4.0   # Max 4h price momentum % before deferring re-entry
+  volatility_threshold_pct: 3.0 # Max 12h hourly return stddev % before deferring re-entry
+  swap_slippage_bps: 150        # 1.5% slippage for PRIME/WETH rebalance swap

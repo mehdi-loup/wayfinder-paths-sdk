@@ -1,0 +1,6 @@
+{
+  "title": "theme",
+  "type": "string",
+  "contentMediaType": "text/markdown",
+  "minLength": 1
+}

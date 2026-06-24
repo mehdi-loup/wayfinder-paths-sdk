@@ -1,0 +1,23 @@
+# A short-window winner that failed multi-year generalization (REGIME_DEPENDENT).
+# Downgraded to draft, not armed — it is a tactical overlay, not universal alpha.
+name: "risk_gate"
+output:
+  signal_snapshot:
+    primary_signal: "hurst_long_short"
+    verdict: "REGIME_DEPENDENT"
+  selected_playbook:
+    id: "regime_dependent_signal"
+    score: 0.70
+  candidate_expressions:
+    - id: candidate-1
+      score: 0.70
+  null_state:
+    selected: false
+    reason: "passed short window but beat B&H on a minority of symbols"
+  risk_checks:
+    passed: true
+    mode: "draft"
+  job:
+    mode: "draft"
+    armed: false
+  next_invalidation: "promote only if it beats B&H on a majority of symbols over 2.5yr"

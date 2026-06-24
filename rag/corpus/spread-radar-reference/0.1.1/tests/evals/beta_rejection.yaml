@@ -1,0 +1,8 @@
+name: "beta-rejection"
+type: "fixture"
+fixture: "beta_rejection"
+assert:
+  null_state.selected: true
+  job.mode: "null"
+  risk_checks.passed: false
+  risk_checks.beta_to_market: 0.82

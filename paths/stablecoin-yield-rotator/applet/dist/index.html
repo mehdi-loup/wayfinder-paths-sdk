@@ -189,7 +189,7 @@
       html += '</tbody></table></div></details>';
     }
 
-    html += '<div class="foot">' + d.row_count + ' markets discovered · static read-only data bundled with the path.<br>For feature request or tracking, go to <a href="https://github.com/mehdi-loup/wayfinder-paths-sdk/issues" target="_blank" rel="noopener noreferrer">github.com/mehdi-loup/wayfinder-paths-sdk/issues</a></div>';
+    html += '<div class="foot">' + d.row_count + ' markets discovered · static read-only snapshot bundled with the path. This dashboard does not connect to, read, or transmit any wallet data.</div>';
 
     app.innerHTML = html;
     app.setAttribute("data-path-ready", "true");

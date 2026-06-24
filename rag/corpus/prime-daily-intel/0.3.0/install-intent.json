@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "3fb9b884380609ac764659ce22828d3c",
+    "path_slug": "prime-daily-intel",
+    "version": "0.3.0",
+    "bundle_sha256": "4a2340f88baeef3efd4ba14a89d2265357b7da44ff768468ca77e4037790d5c1",
+    "issued_at": "2026-05-04T17:12:40.380471+00:00",
+    "expires_at": "2026-05-05T17:12:40.380471+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "86",
+    "install_target": ".wayfinder/paths/prime-daily-intel/0.3.0",
+    "bundle_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/prime-daily-intel/versions/0.3.0/bundle.zip",
+    "applet_url": "https://strategies-dev.wayfinder.ai/api/v1/paths/prime-daily-intel/versions/0.3.0/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "fhT5atna-oMYAKcu9aSGZry2lRk8TAdt-5cDIO3WWwk"
+}

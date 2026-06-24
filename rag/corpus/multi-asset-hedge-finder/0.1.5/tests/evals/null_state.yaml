@@ -1,0 +1,22 @@
+name: null_state
+description: Checks that critic handles null state correctly when no hedge survives policy gates.
+fixture: fixtures/single_asset.yaml
+agent: critic
+assertions:
+  - type: has_keys
+    keys:
+      - verdict
+      - null_state
+      - selected_hedge
+  - type: value_in
+    path: verdict
+    values:
+      - armed
+      - draft
+      - "null"
+      - retry
+  - type: has_keys
+    path: null_state
+    keys:
+      - selected
+      - reason

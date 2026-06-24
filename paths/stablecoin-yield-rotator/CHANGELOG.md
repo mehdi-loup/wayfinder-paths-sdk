@@ -2,6 +2,52 @@
 
 Notable changes to the Stablecoin Yield Rotator path.
 
+## 0.2.3
+
+Republish for archive-policy compliance. No changes to path content, assets, venues, or
+actions.
+
+### Fixed
+
+- **Deterministic skill-export archives.** The uploaded skill-export zips previously
+  carried live filesystem timestamps, so a server-side rebuild could not match the upload
+  and archive-policy verification failed. The archiver now normalizes every entry (fixed
+  timestamp + permissions, junk filtered), matching the bundle/source archives, so the
+  skill exports are reproducible.
+
+## 0.2.2
+
+Documentation clarity for review. No functional changes to assets, venues, or actions.
+
+### Docs
+
+- **Made the position data-flow guarantee explicit in both `README.md` and
+  `skill/instructions.md`.** Both now state that position/balance objects are used **only
+  locally** (ranking, rotation plan, status) or passed to **host-bound Wayfinder execution
+  paths** that sign/broadcast, and are **never transmitted to third parties** (no
+  analytics/telemetry/external POST). Clarified that the `auto-rotate` notify email carries
+  a human-readable rotation summary only, not raw position objects.
+
+## 0.2.1
+
+Review-compliance fixes. No functional changes to assets, venues, or actions.
+
+### Changed
+
+- **Applet: removed the external GitHub origin/link.** Dropped the footer link to the
+  external issues page and emptied `applet.permissions.externalOrigins` (previously listed
+  one external host). The applet is now fully self-contained — `bridge: []`,
+  `externalOrigins: []`, no runtime network access — and its footer states it does not
+  read or transmit wallet data.
+
+### Docs
+
+- **Documented wallet & data flow.** README now has an explicit "Wallet & data flow"
+  section: wallet address is read for balances/positions (never keys), ranking and the
+  rotation plan compute locally, and the only outbound fund-moving traffic is signed
+  transactions (plus the `auto-rotate` email summary). Added a per-action confirmation-gate
+  table covering the read-only vs `--confirm` vs runner (`auto-rotate`) execution paths.
+
 ## 0.2.0
 
 Automation, safer wallet handling, and a large cut in API request volume. No changes to
@@ -14,7 +60,7 @@ supported assets or venues — purely new actions, reliability, and efficiency o
   `inputs/config.yaml` are the only gate. Emails a summary on executed rotations and on
   new failures (no-ops are silent; repeated identical halts alert once). Schedule it as a
   runner job, e.g. daily with `--cron "0 9 * * *"`. Note: runner jobs are live
-  fund-moving automation managed by the Wayfinder Shell.
+  fund-moving automation outside the Claude safety-review hook.
 - **Idle-balance sweep** — idle balances of configured stables in the wallet are planned
   as deposit legs, so a fresh wallet bootstraps into the best venue without a manual
   `deposit`.

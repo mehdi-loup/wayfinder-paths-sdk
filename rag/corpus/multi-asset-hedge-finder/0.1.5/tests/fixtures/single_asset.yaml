@@ -1,0 +1,4 @@
+assets:
+  - symbol: ETH
+    notional_usd: 10000
+    side: long

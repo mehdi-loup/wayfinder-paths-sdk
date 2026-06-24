@@ -1,0 +1,69 @@
+# Quant-desk replication protocol, expressed in the spread-radar policy sections.
+# Ordering principle: get a SIMPLE backtest working on a small basket first, then
+# FIT (grid/experiment/tweak with a train/test split), then OPTIONALLY stress for
+# robustness on held-out data. Heavy multi-year / full-universe / fee work belongs
+# to robustness, not the first pass. See skill/references/ for the full protocol.
+archetype: spread-radar
+
+# `universe` == symbol selection. The FITTING basket is small and the window short
+# (fast first pass + fitting). The full pool + long history are reserved for the
+# held-out robustness phase.
+universe:
+  source: "input_or_default"
+  data_source: "ccxt_binance"
+  fitting_basket: ["BTC", "ETH", "SOL"]
+  fitting_window_days: 365
+  full_pool: ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "AVAX", "DOGE", "LINK", "LTC", "DOT"]
+  hl_native_symbols: ["HYPE"]
+  robustness_min_years: 2
+  robustness_require_bear_window: true
+
+# `features` == signal inputs and the frequencies tested. Each paper runs at its
+# native frequency; forward horizon is grid-searched in fitting, never assumed.
+features:
+  inputs: ["price", "volume", "funding"]
+  bar_intervals: ["15m", "1h", "4h", "1d"]
+  min_tradable_frequency: "15m"
+  forward_bars: "paper_driven"
+
+# `clustering` == how the candidate-paper pool is assembled and bounded.
+clustering:
+  method: "topic_family"
+  canonical_seeding: true
+  max_candidate_papers: 10
+  academic_sources: ["arxiv", "nber", "jfe", "rfs", "jfqa", "qje", "jof", "bis", "fed", "ecb"]
+
+# `candidate_rules` == discovery + feasibility prune (one pass) + reloop floor.
+candidate_rules:
+  keep_axes: ["data", "compute", "value", "frequency", "novelty"]
+  min_keep_papers: 4
+  max_reloops: 2
+  reject_sources: ["ssrn", "medium", "substack", "seeking_alpha", "twitter", "reddit"]
+  prune_below_frequency: "15m"
+
+# `scoring` == the three tiers. The first pass is a gate (not a threshold); fitting
+# optimizes under a train/test split; robustness applies the locked PASS criteria.
+scoring:
+  first_pass:
+    fail_only_on_degenerate: true   # broken impl / no variance / no trades / NaNs
+    weak_thresholds_still_advance: true
+  fitting:
+    train_test_split: "70/30"
+    select_by: "test"               # never pick a config by in-sample/train alone
+    grid_search: true
+    forward_horizon_first: true
+    iteration_budget_variants: 6
+  robustness:
+    walk_forward: "60/40"
+    test_sharpe_min: 0.5
+    test_pct_of_train_min: 0.5
+    beats_bh_symbol_pct_min: 0.5
+    fee_tiers: ["maker", "taker_low", "taker_high"]
+  verdicts: ["PASS", "REGIME_DEPENDENT", "REJECT"]
+
+# `null_state` == the honest zero-reproduction / provisional outcomes.
+null_state:
+  action: "report_rejection"
+  zero_reproduction_allowed: true
+  require_next_steps: true
+  unrobust_signal_is: "PROVISIONAL"   # fitted but robustness skipped/failed

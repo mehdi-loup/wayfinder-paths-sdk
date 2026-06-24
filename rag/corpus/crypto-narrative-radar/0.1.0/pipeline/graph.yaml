@@ -1,0 +1,135 @@
+# Hybrid graph: registers the conditional-router archetype's required nodes
+# (normalize_thesis, market_research, proxy_mapping, qual_research, synthesize,
+# skeptic, risk_gate, compile_job) as pass-through aliases into the narrative-
+# radar-style scan/adversarial/portfolio flow. The conditional-router conformance
+# nodes carry no separate agent bodies — they bridge the archetype registry's
+# required topology onto the concrete domain-scanner + adversarial-chain flow.
+nodes:
+  - id: "intake"
+  # conditional-router conformance nodes (pass-through bridges)
+  - id: "normalize_thesis"
+  - id: "market_research"
+  - id: "proxy_mapping"
+  - id: "qual_research"
+  - id: "synthesize"
+  - id: "skeptic"
+  - id: "risk_gate"
+  - id: "compile_job"
+  # narrative-radar-style domain scans and adversarial chain
+  - id: "geopolitical_scan"
+  - id: "macro_scan"
+  - id: "regulatory_scan"
+  - id: "tech_scan"
+  - id: "structural_scan"
+  - id: "thesis_synthesis"
+  - id: "novelty_gate"
+  - id: "pre_mortem"
+  - id: "consensus_audit"
+  - id: "historical_analog"
+  - id: "portfolio_strategy"
+  - id: "compile_inventory"
+  - id: "display_compose"
+  - id: "finalize"
+
+edges:
+  # intake → conditional-router conformance spine
+  - from: "intake"
+    to: "normalize_thesis"
+  # conditional-router spine also fans out to conformance aliases
+  - from: "normalize_thesis"
+    to: "market_research"
+  - from: "normalize_thesis"
+    to: "proxy_mapping"
+  - from: "normalize_thesis"
+    to: "qual_research"
+  # normalize_thesis → five concrete domain scans (the real work)
+  - from: "normalize_thesis"
+    to: "geopolitical_scan"
+  - from: "normalize_thesis"
+    to: "macro_scan"
+  - from: "normalize_thesis"
+    to: "regulatory_scan"
+  - from: "normalize_thesis"
+    to: "tech_scan"
+  - from: "normalize_thesis"
+    to: "structural_scan"
+  # conformance aliases merge into synthesize (alongside the five scans)
+  - from: "market_research"
+    to: "synthesize"
+  - from: "proxy_mapping"
+    to: "synthesize"
+  - from: "qual_research"
+    to: "synthesize"
+  - from: "geopolitical_scan"
+    to: "synthesize"
+  - from: "macro_scan"
+    to: "synthesize"
+  - from: "regulatory_scan"
+    to: "synthesize"
+  - from: "tech_scan"
+    to: "synthesize"
+  - from: "structural_scan"
+    to: "synthesize"
+  # synthesize hands off to the concrete thesis synthesizer
+  - from: "synthesize"
+    to: "thesis_synthesis"
+  # narrative-radar adversarial chain
+  - from: "thesis_synthesis"
+    to: "novelty_gate"
+  - from: "novelty_gate"
+    to: "skeptic"
+  - from: "skeptic"
+    to: "pre_mortem"
+  - from: "pre_mortem"
+    to: "consensus_audit"
+  - from: "consensus_audit"
+    to: "historical_analog"
+  # historical_analog → risk_gate (conditional-router alias) → portfolio_strategy
+  - from: "historical_analog"
+    to: "risk_gate"
+  - from: "risk_gate"
+    to: "portfolio_strategy"
+  # portfolio_strategy compiles into inventory, then the conditional-router
+  # `compile_job` alias, then display, then finalize
+  - from: "portfolio_strategy"
+    to: "compile_inventory"
+  - from: "compile_inventory"
+    to: "compile_job"
+  - from: "compile_job"
+    to: "display_compose"
+  - from: "display_compose"
+    to: "finalize"
+
+failure_edges:
+  - from: "geopolitical_scan"
+    on: "retryable_error"
+    to: "geopolitical_scan"
+    max_retries: 1
+  - from: "macro_scan"
+    on: "retryable_error"
+    to: "macro_scan"
+    max_retries: 1
+  - from: "regulatory_scan"
+    on: "retryable_error"
+    to: "regulatory_scan"
+    max_retries: 1
+  - from: "tech_scan"
+    on: "retryable_error"
+    to: "tech_scan"
+    max_retries: 1
+  - from: "structural_scan"
+    on: "retryable_error"
+    to: "structural_scan"
+    max_retries: 1
+  - from: "novelty_gate"
+    on: "all_killed"
+    to: "finalize"
+    max_retries: 0
+  - from: "historical_analog"
+    on: "all_rejected"
+    to: "compile_inventory"
+    max_retries: 0
+  - from: "portfolio_strategy"
+    on: "no_instruments"
+    to: "compile_inventory"
+    max_retries: 0

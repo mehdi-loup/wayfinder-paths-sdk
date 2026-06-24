@@ -1,0 +1,19 @@
+{
+  "intent": {
+    "intent_id": "4bf5a19fb6b0c4d04655d048deca6bf3",
+    "path_slug": "spread-radar-reference",
+    "version": "0.1.1",
+    "bundle_sha256": "f852b1fe8c9dd5d31c2335e357f6c9bd1477ac2cab94841f3af9b56a0f35b171",
+    "issued_at": "2026-06-03T13:33:12.984685+00:00",
+    "expires_at": "2026-06-04T13:33:12.984685+00:00",
+    "runtime": "sdk-cli",
+    "venue": "sdk-cli",
+    "requester_wallet": "",
+    "requester_user_id": "663",
+    "install_target": "/Users/mln/Documents/Claude/Projects/Job Hunt/day11-rag/corpus/spread-radar-reference/0.1.1",
+    "bundle_url": "https://strategies.wayfinder.ai/api/v1/paths/spread-radar-reference/versions/0.1.1/bundle.zip",
+    "applet_url": "https://strategies.wayfinder.ai/api/v1/paths/spread-radar-reference/versions/0.1.1/applet/",
+    "prompt_hint": "Install this path, verify the hash, summarize permissions, and explain how to use it."
+  },
+  "signature": "scrt-q7Oep_yq4qUEhgAB1fNSEwMiF-WwL1H4aNJcNY"
+}
