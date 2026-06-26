@@ -18,6 +18,7 @@ Namespaces:
   - hyperliquid  HL perp/spot/HIP-3/HIP-4 reads + writes
   - onchain      token resolution, swaps, sends, wallet activity
   - polymarket   prediction markets reads + writes
+  - sports       provider-agnostic sports data + betting backtests (backend-mediated)
   - contracts    contract compile/deploy/call/abi
   - core         cross-persona tools every subagent should allowlist
                  (discovery, wallet reads, web search/fetch, run_script, runner)
@@ -73,11 +74,14 @@ from wayfinder_paths.mcp.tools.goldsky_direct import (
 from wayfinder_paths.mcp.tools.hyperliquid import (
     hyperliquid_cancel_order,
     hyperliquid_deposit_usdc,
+    hyperliquid_get_candles,
+    hyperliquid_get_funding_history,
     hyperliquid_get_state,
     hyperliquid_get_trade_asset,
     hyperliquid_place_limit_order,
     hyperliquid_place_market_order,
     hyperliquid_place_trigger_order,
+    hyperliquid_search_hip4,
     hyperliquid_search_market,
     hyperliquid_search_mid_prices,
     hyperliquid_update_leverage,
@@ -115,6 +119,11 @@ from wayfinder_paths.mcp.tools.research_gateway import (
 )
 from wayfinder_paths.mcp.tools.run_script import core_run_script
 from wayfinder_paths.mcp.tools.runner import core_runner, core_runner_status
+from wayfinder_paths.mcp.tools.sports import (
+    sports_backtest_state,
+    sports_provider,
+    sports_snapshot,
+)
 from wayfinder_paths.mcp.tools.strategies import core_run_strategy
 from wayfinder_paths.mcp.tools.tokens import (
     onchain_fuzzy_search_tokens,
@@ -162,7 +171,10 @@ def build_mcp(
     mcp.tool()(hyperliquid_get_state)
     mcp.tool()(hyperliquid_get_trade_asset)
     mcp.tool()(hyperliquid_search_market)
+    mcp.tool()(hyperliquid_search_hip4)
     mcp.tool()(hyperliquid_search_mid_prices)
+    mcp.tool()(hyperliquid_get_candles)
+    mcp.tool()(hyperliquid_get_funding_history)
     mcp.tool()(hyperliquid_place_market_order)
     mcp.tool()(hyperliquid_place_limit_order)
     mcp.tool()(hyperliquid_place_trigger_order)
@@ -213,6 +225,13 @@ def build_mcp(
     mcp.tool()(research_search_lending)
     mcp.tool()(research_search_perp)
     mcp.tool()(research_search_borrow_routes)
+
+    # ─── sports_* (provider-agnostic; provider key stays backend-side) ──
+    # snapshot + backtest_state are the primary's surface; provider is the full
+    # facade and is permission-gated to the hidden wayfinder-sports subagent.
+    mcp.tool()(sports_snapshot)
+    mcp.tool()(sports_backtest_state)
+    mcp.tool()(sports_provider)
 
     # ─── visual_* + notification_send (opencode-only) ─────────────────
     if is_opencode_instance():
