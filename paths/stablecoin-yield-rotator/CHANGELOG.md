@@ -2,6 +2,37 @@
 
 Notable changes to the Stablecoin Yield Rotator path.
 
+## 0.4.0
+
+Correctness and reliability fixes. No new assets, venues, or actions.
+
+### Fixed
+
+- **Diversification cap can no longer be bypassed by multiple source positions.** When two
+  positions of the same stablecoin both rank into the same top venue, the planner now
+  tracks committed inflow within a single pass, so their combined size can't exceed
+  `max_position_pct_per_venue`. Previously each leg was sized to the cap independently and
+  could stack to twice it.
+
+### Changed
+
+- **Morpho vaults are ranked on base, reward-free APY** (`net_apy_excluding_rewards`)
+  instead of the rewards-inclusive `net_apy`, matching the lending venues (which scan
+  without rewards). Reward-token yields are volatile and often claim-gated, so the previous
+  basis over-ranked incentivized vaults.
+
+### Removed
+
+- **Dropped the unused `ledger_record` config knob.** It was never wired to a ledger write;
+  removed from `inputs/config.yaml` and the prompt spec so it no longer implies a feature
+  that doesn't exist.
+
+### Internal
+
+- **`scripts/venues.py` is now mypy-clean.** Narrowed the adapter `(ok, payload)` result
+  guards (`isinstance(..., list)` / `isinstance(..., dict)`) so the success payload type
+  resolves, clearing 58 pre-existing `union-attr`/`arg-type` errors. No behavior change.
+
 ## 0.2.3
 
 Republish for archive-policy compliance. No changes to path content, assets, venues, or

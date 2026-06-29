@@ -61,7 +61,6 @@ constraints:
   max_scan_apy: 0.5                       # stablecoin APY sanity cap
   blocklist_markets: []                   # optional safety overrides
 slippage_bps: 30
-ledger_record: true
 ```
 
 ## Action surface
@@ -95,7 +94,7 @@ ledger_record: true
 
 1. `scan` returns a ranked table for all configured (asset, venue, chain) tuples with no missing rows; APYs match Delta Lab `screen/lending` to within 5 bps.
 2. `quote-rotation` produces a deterministic plan from cached scan data plus live wallet positions.
-3. `update` successfully rotates a test position cross-venue (e.g., Aave Base → Morpho Base) on a Gorlami fork, ledger entry written.
+3. `update` successfully rotates a test position cross-venue (e.g., Aave Base → Morpho Base) on a Gorlami fork.
 4. `update` successfully rotates cross-chain (e.g., Aave Arbitrum → Hyperlend HyperEVM) on dual-fork simulation; bridge gas + token seeded on destination, deposit completes.
 5. `status` shows blended portfolio APY equal to weighted-average of position APYs.
 6. Smoke test exercises scan → deposit → update → withdraw on a single chain.

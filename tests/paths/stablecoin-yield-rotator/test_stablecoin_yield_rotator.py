@@ -295,7 +295,10 @@ async def test_morpho_vault_scan_maps_listed_stable_vaults():
             "decimals": 6,
         },
         "state": {
+            # net_apy bakes in reward tokens; the rotator ranks on the reward-free
+            # figure for consistency with the lending venues, so it must win here.
             "net_apy": 0.052,
+            "net_apy_excluding_rewards": 0.041,
             "total_assets_usd": 354_000_000.0,
         },
     }]))
@@ -306,7 +309,7 @@ async def test_morpho_vault_scan_maps_listed_stable_vaults():
     assert rows[0].venue == "morpho_vault"
     assert rows[0].market_id == "0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61"
     assert rows[0].asset_symbol == "USDC"
-    assert rows[0].supply_apy == pytest.approx(0.052)
+    assert rows[0].supply_apy == pytest.approx(0.041)
     assert rows[0].tvl_usd == pytest.approx(354_000_000.0)
 
 
