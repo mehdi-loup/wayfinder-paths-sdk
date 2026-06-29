@@ -170,6 +170,31 @@ def test_diversification_cap():
     assert not plan.skipped
 
 
+def test_diversification_cap_across_multiple_source_positions():
+    # Two separate positions of the same asset both want to rotate into the single
+    # top venue. Each would be sized to the 50% cap in isolation; combined they must
+    # still not exceed 50% of the asset total (regression: per-pass inflow tracking).
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("hyperlend", 999, "USDC", "0xH", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xM", 0.090),
+    ]
+    positions = [
+        _position("aave_v3", 8453, "USDC", "0xA", 50_000 * 10**6),
+        _position("hyperlend", 999, "USDC", "0xH", 50_000 * 10**6),
+    ]
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50, max_position_pct_per_venue=50,
+    )
+    into_morpho = sum(
+        leg.raw_amount for leg in plan.legs
+        if (leg.to_venue, leg.to_chain_id) == ("morpho_blue_market", 8453)
+    )
+    # 50% of the 100k USDC total — not 100% from both legs stacking.
+    assert into_morpho <= 50_000 * 10**6
+    assert any("diversification_cap" in (s.skip_reason or "") for s in plan.skipped)
+
+
 @pytest.mark.parametrize("asset,decimals", [("USDC", 6), ("USDT", 6), ("DAI", 18)])
 def test_per_asset_decimal_handling(asset, decimals):
     scan = [

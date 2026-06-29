@@ -170,7 +170,7 @@ def _venue_supports(venue: str, chain_id: int) -> bool:
 
 async def _scan_aave_v3(adapter: AaveV3Adapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
     ok, markets = await adapter.get_all_markets(chain_id=chain_id, include_rewards=False)
-    if not ok:
+    if not ok or not isinstance(markets, list):
         raise RuntimeError(f"aave_v3 get_all_markets failed on chain {chain_id}: {markets}")
     rows: list[VenueRow] = []
     for m in markets:
@@ -206,7 +206,7 @@ async def _aave_positions(adapter: AaveV3Adapter, chain_id: int, allowed: set[st
     ok, state = await adapter.get_full_user_state_per_chain(
         chain_id=chain_id, account=account, include_rewards=False, include_zero_positions=False
     )
-    if not ok:
+    if not ok or not isinstance(state, dict):
         raise RuntimeError(f"aave_v3 user state failed on chain {chain_id}: {state}")
     positions: list[Position] = []
     for p in state.get("positions") or []:
@@ -234,7 +234,7 @@ async def _aave_positions(adapter: AaveV3Adapter, chain_id: int, allowed: set[st
 
 async def _scan_morpho(adapter: MorphoAdapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
     ok, markets = await adapter.get_all_markets(chain_id=chain_id)
-    if not ok:
+    if not ok or not isinstance(markets, list):
         raise RuntimeError(f"morpho_blue_market get_all_markets failed on chain {chain_id}: {markets}")
     rows: list[VenueRow] = []
     for m in markets:
@@ -269,7 +269,7 @@ async def _scan_morpho(adapter: MorphoAdapter, chain_id: int, allowed: set[str])
 
 async def _morpho_positions(adapter: MorphoAdapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
     ok, state = await adapter.get_full_user_state_per_chain(chain_id=chain_id, account=account)
-    if not ok:
+    if not ok or not isinstance(state, dict):
         raise RuntimeError(f"morpho_blue_market user state failed on chain {chain_id}: {state}")
     positions: list[Position] = []
     for p in state.get("positions") or []:
@@ -297,8 +297,12 @@ async def _morpho_positions(adapter: MorphoAdapter, chain_id: int, allowed: set[
 # ---------------------------------------------------------------------------
 
 def _vault_apy(vault: dict[str, Any]) -> float:
+    # Rank on base, reward-free yield to stay consistent with the lending venues
+    # (which scan with include_rewards=False). net_apy / apy_with_rewards bake in
+    # volatile, often claim-gated reward tokens and would over-rank incentivized
+    # vaults; net_apy_excluding_rewards is net of the vault fee but excludes rewards.
     state = vault.get("state") or {}
-    for key in ("net_apy", "apy", "apy_with_rewards"):
+    for key in ("net_apy_excluding_rewards", "net_apy_without_rewards", "apy"):
         value = state.get(key)
         if value is not None:
             return float(value or 0.0)
@@ -307,7 +311,7 @@ def _vault_apy(vault: dict[str, Any]) -> float:
 
 async def _scan_morpho_vault(adapter: MorphoAdapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
     ok, vaults = await adapter.get_all_vaults(chain_id=chain_id, listed=True, include_v2=True)
-    if not ok:
+    if not ok or not isinstance(vaults, list):
         raise RuntimeError(f"morpho_vault get_all_vaults failed on chain {chain_id}: {vaults}")
     rows: list[VenueRow] = []
     for v in vaults:
@@ -397,7 +401,7 @@ async def _morpho_vault_positions(adapter: MorphoAdapter, chain_id: int, allowed
 
 async def _scan_sparklend(adapter: SparkLendAdapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
     ok, markets = await adapter.get_all_markets(chain_id=chain_id, include_caps=True)
-    if not ok:
+    if not ok or not isinstance(markets, list):
         raise RuntimeError(f"sparklend get_all_markets failed on chain {chain_id}: {markets}")
     rows: list[VenueRow] = []
     for m in markets:
@@ -430,7 +434,7 @@ async def _scan_sparklend(adapter: SparkLendAdapter, chain_id: int, allowed: set
 
 async def _sparklend_positions(adapter: SparkLendAdapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
     ok, state = await adapter.get_full_user_state(chain_id=chain_id, account=account)
-    if not ok:
+    if not ok or not isinstance(state, dict):
         raise RuntimeError(f"sparklend user state failed on chain {chain_id}: {state}")
     positions: list[Position] = []
     for p in state.get("positions") or []:
@@ -545,7 +549,7 @@ async def _scan_euler_v2(adapter: EulerV2Adapter, chain_id: int, allowed: set[st
 
 async def _euler_positions(adapter: EulerV2Adapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
     ok, state = await adapter.get_full_user_state(chain_id=chain_id, account=account, include_zero_positions=False)
-    if not ok:
+    if not ok or not isinstance(state, dict):
         raise RuntimeError(f"euler_v2 user state failed on chain {chain_id}: {state}")
     discovered = await _euler_stable_vaults(chain_id, allowed)
     positions: list[Position] = []
@@ -629,7 +633,7 @@ async def _euler_positions(adapter: EulerV2Adapter, chain_id: int, allowed: set[
 async def _scan_hyperlend(adapter: HyperlendAdapter, chain_id: int, allowed: set[str]) -> list[VenueRow]:
     # Hyperlend is HyperEVM-only; the adapter ignores chain_id and reads from a fixed pool.
     ok, markets = await adapter.get_all_markets()
-    if not ok:
+    if not ok or not isinstance(markets, list):
         raise RuntimeError(f"hyperlend get_all_markets failed: {markets}")
     rows: list[VenueRow] = []
     for m in markets:
@@ -661,7 +665,7 @@ async def _scan_hyperlend(adapter: HyperlendAdapter, chain_id: int, allowed: set
 async def _hyperlend_positions(adapter: HyperlendAdapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
     # Hyperlend chain_id is fixed at HyperEVM (999); the param is here for the dispatcher contract.
     ok, state = await adapter.get_full_user_state(account=account, include_zero_positions=False)
-    if not ok:
+    if not ok or not isinstance(state, dict):
         raise RuntimeError(f"hyperlend user state failed: {state}")
     positions: list[Position] = []
     for p in state.get("positions") or []:

@@ -263,6 +263,10 @@ def quote_rotation(
         if not targets:
             continue
 
+        # How much of `asset` this pass has already committed to each target (venue, chain).
+        # Without it, two source positions could each be sized to the cap and combine past it.
+        planned_inflow_human: dict[tuple[str, int], float] = {}
+
         for pos in asset_positions:
             if pos.chain_id in gasless_sources:
                 # No native gas to sign even the first tx on this chain; a top-up can't
@@ -373,6 +377,7 @@ def quote_rotation(
                 if p.venue == chosen.venue and p.chain_id == chosen.chain_id
                 and (p.venue, p.chain_id, p.market_id) != (pos.venue, pos.chain_id, pos.market_id)
             )
+            current_into_target += planned_inflow_human.get((chosen.venue, chosen.chain_id), 0.0)
             total = total_supply_by_asset.get(asset) or 0.0
             if total > 0:
                 max_into_target = total * venue_cap_fraction
@@ -458,5 +463,9 @@ def quote_rotation(
                 continue
 
             plan.legs.append(leg)
+            planned_inflow_human[(chosen.venue, chosen.chain_id)] = (
+                planned_inflow_human.get((chosen.venue, chosen.chain_id), 0.0)
+                + raw_amount / (10 ** pos.decimals)
+            )
 
     return plan
