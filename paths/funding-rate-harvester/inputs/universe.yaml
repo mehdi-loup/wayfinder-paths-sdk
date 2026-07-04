@@ -1,0 +1,6 @@
+symbols: [BTC, ETH, SOL, HYPE, KAITO, ENA, EIGEN, ETHFI]
+filters:
+  min_oi_usd: 10_000_000
+  min_funding_apr_bps: 800
+  max_lookback_volatility_pct: 60
+allow_dynamic_discovery: true             # also pull top funding markets from Delta Lab beyond the whitelist

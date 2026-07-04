@@ -1,0 +1,65 @@
+schema_version: '0.1'
+slug: funding-rate-harvester
+name: Funding Rate Harvester
+version: 0.1.0
+summary: "Delta-neutral funding harvester with a triple carry stack. Ranks Hyperliquid\
+  \ perp markets by net stacked carry (funding EMA + spot-leg yield \u2212 fees \u2212\
+  \ slippage), opens hedge-first pairs where the long hedge itself earns yield (Pendle\
+  \ PT, ether.fi weETH, Ethena sUSDe, or plain HL spot), optionally locks harvested\
+  \ floating funding to a Boros fixed rate, and rotates across assets and spot legs\
+  \ only when the uplift beats total migration cost within a breakeven window. Ships\
+  \ paper mode, liquidation/ drawdown/stale-data rails, and runner-schedulable updates."
+primary_kind: strategy
+tags:
+- strategy
+- funding
+- delta-neutral
+- hyperliquid
+- pendle
+- boros
+- rotation
+components:
+- id: main
+  kind: script
+  path: scripts/main.py
+skill:
+  enabled: true
+  source: generated
+  name: funding-rate-harvester
+  description: "Go-to for harvesting perp funding delta-neutrally: \"harvest funding\"\
+    , \"basis trade\", \"delta-neutral yield on ETH/BTC/HYPE\", or \"short perp, long\
+    \ spot\" requests. Discovers the best (asset, spot-leg) pairs on Hyperliquid by\
+    \ net stacked carry \u2014 funding EMA plus the yield the long hedge itself earns\
+    \ (Pendle PT fixed, weETH staking, sUSDe vault, or zero-yield HL spot) minus fees\
+    \ and slippage \u2014 then quotes, opens hedge-first pairs, rebalances delta inside\
+    \ a band, exits negative carry after a grace period, and rotates only when threshold\
+    \ AND breakeven AND dwell all pass. Optional Boros fixed-rate lock converts rich\
+    \ floating funding to fixed. Paper mode rehearses everything with virtual balances;\
+    \ fund-moving actions are confirmation-gated."
+  instructions: skill/instructions.md
+  runtime:
+    mode: thin
+    package: wayfinder-paths
+    version: 0.10.0
+    python: '>=3.12,<3.13'
+    component: main
+    bootstrap: uv
+    fallback_bootstrap: pipx
+    prefer_existing_runtime: true
+    require_api_key: false
+    api_key_env: WAYFINDER_API_KEY
+    config_path_env: WAYFINDER_CONFIG_PATH
+inputs:
+  slots:
+    config:
+      type: yaml
+      path: inputs/config.yaml
+      required: true
+      description: Wallet, mode (paper/live), hedge venue settings, spot-leg priority,
+        scoring/rotation/risk thresholds, Boros rate-lock flag, and cost estimates.
+    universe:
+      type: yaml
+      path: inputs/universe.yaml
+      required: true
+      description: Asset whitelist, OI/funding/volatility filters, and the Delta Lab
+        dynamic-discovery flag.
