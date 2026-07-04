@@ -1,0 +1,1675 @@
+"""
+Funding Rate Harvester — main entrypoint.
+
+Delta-neutral funding harvester with a triple carry stack: Hyperliquid perp
+shorts hedged by yield-bearing spot legs (Pendle PT / weETH / sUSDe / HL
+spot), an optional Boros fixed-rate lock on the harvested funding, and
+breakeven-gated rotation across assets and spot legs.
+
+Actions:
+  discover  — read-only ranked table of (asset, spot leg) net stacked carry
+  quote     — full carry decomposition for one symbol/size (+ Boros lock quote)
+  deposit   — open a pair: hedge (HL short) first, then spot leg
+  update    — core loop: rails → negative-carry exit → rotation → delta → lock
+  rotate    — evaluate rotation now (--force bypasses dwell, never breakeven)
+  lock      — manually open a Boros fixed-rate lock sized to the short leg
+  unlock    — manually unwind a Boros lock
+  status    — per-pair carry, PnL, lock PnL (separate), liq distance
+  unwind    — close one/all pairs (spot first, hedge last)
+  exit      — settle to USDC and transfer remaining balance to the main wallet
+
+Fund-moving actions emit a plan with status=requires_confirmation unless
+--confirm is passed. Orchestration only — all math lives in scoring.py.
+"""
+
+from __future__ import annotations
+
+# ruff: noqa: E402 — sibling imports need the sys.path insert first
+import argparse
+import asyncio
+import json
+import math
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import yaml
+from loguru import logger
+
+PATH_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PATH_DIR / "scripts"))
+
+from legs import (  # noqa: E402
+    SUSDE_TOKEN_ID,
+    WEETH_TOKEN_ID,
+    EthenaLeg,
+    EtherfiLeg,
+    HedgeVenue,
+    HlSpotLeg,
+    HyperliquidHedge,
+    PairExecutor,
+    PaperHedge,
+    PaperSpotLeg,
+    PendlePtLeg,
+    SpotLeg,
+)
+from rate_lock import BorosRateLock, LockQuote  # noqa: E402
+from scoring import (  # noqa: E402
+    HOURS_PER_YEAR,
+    CarryComponents,
+    ComboScore,
+    cost_apr,
+    delta_rebalance_decision,
+    drawdown_halted,
+    ema_alpha,
+    epoch_bucket,
+    idempotency_key,
+    is_stale,
+    liquidation_action,
+    lock_decision,
+    negative_carry_exit,
+    normalize_funding_apr,
+    rank_combos,
+    required_margin_usd,
+    rotation_decision,
+    update_ema,
+)
+
+from wayfinder_paths.adapters.balance_adapter.adapter import (
+    BalanceAdapter,  # noqa: E402
+)
+from wayfinder_paths.adapters.boros_adapter import BorosAdapter  # noqa: E402
+from wayfinder_paths.adapters.brap_adapter.adapter import BRAPAdapter  # noqa: E402
+from wayfinder_paths.adapters.ethena_vault_adapter import (
+    EthenaVaultAdapter,  # noqa: E402
+)
+from wayfinder_paths.adapters.hyperliquid_adapter import (
+    HyperliquidAdapter,  # noqa: E402
+)
+from wayfinder_paths.adapters.ledger_adapter import LedgerAdapter  # noqa: E402
+from wayfinder_paths.adapters.pendle_adapter import PendleAdapter  # noqa: E402
+from wayfinder_paths.core.clients.DeltaLabClient import DELTA_LAB_CLIENT  # noqa: E402
+from wayfinder_paths.core.clients.HyperliquidDataClient import (  # noqa: E402
+    HYPERLIQUID_DATA_CLIENT,
+)
+from wayfinder_paths.core.clients.NotifyClient import NOTIFY_CLIENT  # noqa: E402
+from wayfinder_paths.core.clients.TokenClient import TOKEN_CLIENT  # noqa: E402
+from wayfinder_paths.core.config import CONFIG  # noqa: E402
+from wayfinder_paths.core.constants import HYPERLIQUID_BRIDGE_ADDRESS  # noqa: E402
+from wayfinder_paths.core.constants.hyperliquid import (  # noqa: E402
+    MIN_DEPOSIT_USD,
+    MIN_ORDER_USD_NOTIONAL,
+)
+from wayfinder_paths.core.utils.tokens import get_token_balance  # noqa: E402
+from wayfinder_paths.core.utils.wallets import (  # noqa: E402
+    find_wallet_by_label,
+    get_wallet_signing_callback,
+    load_wallets,
+)
+from wayfinder_paths.core.utils.web3 import web3_from_chain_id  # noqa: E402
+from wayfinder_paths.mcp.scripting import get_adapter  # noqa: E402
+from wayfinder_paths.runner.monitor_state import (  # noqa: E402
+    read_monitor_state,
+    write_monitor_state,
+)
+
+PATH_SLUG = "funding-rate-harvester"
+STATE_NAME = "funding_rate_harvester"
+
+WEETH_MAINNET = "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee"
+SUSDE_MAINNET = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497"
+USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+USDC_ARBITRUM_TOKEN_ID = "usd-coin-arbitrum"
+
+# Per-side execution-cost estimates (bps of notional) used in the carry score;
+# override in inputs/config.yaml under costs.
+DEFAULT_HEDGE_TAKER_FEE_BPS = 4.5  # HL base-tier taker
+DEFAULT_SPOT_COST_BPS = {"hl_spot": 4.5, "pendle_pt": 30.0, "etherfi": 25.0, "ethena": 25.0}
+DEFAULT_SLIPPAGE_COST_BPS_PER_FILL = 5.0
+DEFAULT_COST_AMORTIZATION_DAYS = 30.0
+# Flat per-migration gas allowance when an EVM spot leg is involved.
+EVM_LEG_GAS_USD = 5.0
+MIN_GAS_WEI = 3 * 10**14  # ~0.0003 native
+
+EXECUTED_KEY_TTL_S = 7 * 86400
+
+
+# ---------------------------------------------------------------------------
+# IO helpers
+# ---------------------------------------------------------------------------
+
+def load_yaml(name: str) -> dict[str, Any]:
+    return yaml.safe_load((PATH_DIR / "inputs" / name).read_text(encoding="utf-8")) or {}
+
+
+def emit(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _default_state() -> dict[str, Any]:
+    return {
+        "pairs": {},
+        "funding_ema": {},
+        "below_floor_since_ts": None,
+        "executed_keys": {},
+        "reference_value_usd": 0.0,
+        "halted": False,
+        "halt_reason": None,
+        "stale_alerted": False,
+        "history": [],
+        "paper": {},
+    }
+
+
+def load_state() -> dict[str, Any]:
+    state = read_monitor_state(STATE_NAME, _default_state())
+    for key, value in _default_state().items():
+        state.setdefault(key, value)
+    return state
+
+
+def save_state(state: dict[str, Any]) -> None:
+    write_monitor_state(STATE_NAME, state)
+
+
+def _already_executed(state: dict[str, Any], key: str) -> bool:
+    return key in state["executed_keys"]
+
+
+def _mark_executed(state: dict[str, Any], key: str) -> None:
+    now = _now()
+    state["executed_keys"][key] = now
+    state["executed_keys"] = {
+        k: ts for k, ts in state["executed_keys"].items() if now - ts < EXECUTED_KEY_TTL_S
+    }
+
+
+def _log_history(state: dict[str, Any], event: dict[str, Any]) -> None:
+    state["history"] = (state["history"] + [{**event, "ts": _now()}])[-50:]
+
+
+async def _notify(title: str, message: str) -> None:
+    try:
+        await NOTIFY_CLIENT.notify(title, message)
+    except Exception as exc:
+        logger.warning(f"notify failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Wallet resolution (session-connected wallet preferred; see skill notes)
+# ---------------------------------------------------------------------------
+
+async def _resolve_wallet_label(config: dict[str, Any]) -> str:
+    configured = str(config.get("wallet") or "").strip()
+    wallets = await load_wallets()
+    labels = [str(w.get("label") or "").strip() for w in wallets if w.get("label")]
+    remote_labels = [
+        str(w.get("label") or "").strip()
+        for w in wallets
+        if w.get("type") == "remote" and w.get("label")
+    ]
+    if configured and configured in remote_labels:
+        return configured
+    if len(remote_labels) == 1:
+        return remote_labels[0]
+    if configured and configured in labels:
+        return configured
+    if len(labels) == 1:
+        return labels[0]
+    raise SystemExit(
+        f"Wallet '{configured or '(unset)'}' not found; available: {labels or 'none'}. "
+        "Set 'wallet' in inputs/config.yaml."
+    )
+
+
+async def _resolve_operating_label(config: dict[str, Any], main_label: str) -> str:
+    strategy_label = str(config.get("strategy_wallet") or "").strip()
+    if strategy_label and await find_wallet_by_label(strategy_label) is not None:
+        return strategy_label
+    return main_label
+
+
+# ---------------------------------------------------------------------------
+# Context: adapters + hedge + legs wiring (paper wrappers when mode=paper)
+# ---------------------------------------------------------------------------
+
+class Ctx:
+    config: dict[str, Any]
+    universe: dict[str, Any]
+    state: dict[str, Any]
+    main_label: str
+    label: str
+    address: str
+    paper: bool
+    hedge: HedgeVenue
+    live_hedge: HyperliquidHedge
+    legs: dict[str, SpotLeg]
+    executor: PairExecutor
+    brap: BRAPAdapter
+    ledger: LedgerAdapter | None
+    boros_lock: BorosRateLock | None
+
+
+async def _token_price(token_id: str) -> float | None:
+    try:
+        details = await TOKEN_CLIENT.get_token_details(token_id, market_data=True)
+        price = details.get("current_price")
+        return float(price) if price is not None else None
+    except Exception as exc:
+        logger.warning(f"price lookup failed for {token_id}: {exc}")
+        return None
+
+
+async def _weeth_yield_apy(_symbol: str) -> float | None:
+    """ether.fi staking APY via Delta Lab (weETH yield-token feed)."""
+    try:
+        found = await DELTA_LAB_CLIENT.search_assets(query="weETH", chain_id=1)
+        for asset in found.get("assets", []):
+            if str(asset.get("symbol", "")).upper() != "WEETH":
+                continue
+            latest = await DELTA_LAB_CLIENT.get_asset_yield_latest(
+                asset_id=int(asset["asset_id"])
+            )
+            if latest is not None and latest.apy_base is not None:
+                return float(latest.apy_base)
+        return None
+    except Exception as exc:
+        logger.warning(f"weETH yield lookup failed: {exc}")
+        return None
+
+
+async def build_ctx(
+    config: dict[str, Any],
+    universe: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    need_boros: bool = False,
+) -> Ctx:
+    ctx = Ctx()
+    ctx.config = config
+    ctx.universe = universe
+    ctx.state = state
+    ctx.paper = str(config.get("mode") or "live").lower() == "paper"
+    ctx.main_label = await _resolve_wallet_label(config)
+    ctx.label = await _resolve_operating_label(config, ctx.main_label)
+
+    hl_adapter = await get_adapter(HyperliquidAdapter, ctx.label)
+    _, ctx.address = await get_wallet_signing_callback(ctx.label)
+    builder_fee = (CONFIG.get("strategy") or {}).get("builder_fee")
+
+    ctx.brap = await get_adapter(BRAPAdapter, ctx.label)
+    pendle = await get_adapter(PendleAdapter, ctx.label)
+    ethena = await get_adapter(EthenaVaultAdapter, ctx.label)
+
+    ctx.ledger = None
+    if bool(config.get("ledger_record", True)):
+        try:
+            ctx.ledger = await get_adapter(LedgerAdapter)
+        except Exception as exc:
+            logger.warning(f"ledger adapter unavailable: {exc}")
+
+    ctx.live_hedge = HyperliquidHedge(hl_adapter, ctx.address, builder_fee)
+
+    address = ctx.address
+
+    async def weeth_balance() -> float:
+        raw = await get_token_balance(WEETH_MAINNET, chain_id=1, wallet_address=address)
+        return raw / 1e18
+
+    async def susde_balance() -> float:
+        raw = await get_token_balance(SUSDE_MAINNET, chain_id=1, wallet_address=address)
+        return raw / 1e18
+
+    pendle_cfg = config.get("pendle") or {}
+    live_legs: dict[str, SpotLeg] = {
+        "hl_spot": HlSpotLeg(hl_adapter, ctx.address, builder_fee),
+        "pendle_pt": PendlePtLeg(
+            pendle,
+            ctx.address,
+            min_liquidity_usd=float(pendle_cfg.get("min_liquidity_usd", 250_000)),
+            min_days_to_expiry=float(pendle_cfg.get("min_days_to_expiry", 7)),
+            slippage=float(config.get("slippage_bps", 25)) / 10_000,
+        ),
+        "etherfi": EtherfiLeg(
+            ctx.brap,
+            ctx.address,
+            balance_lookup=weeth_balance,
+            yield_lookup=_weeth_yield_apy,
+            price_lookup=_token_price,
+        ),
+        "ethena": EthenaLeg(
+            ctx.brap,
+            ctx.address,
+            ethena_adapter=ethena,
+            balance_lookup=susde_balance,
+            price_lookup=_token_price,
+        ),
+    }
+    enabled = [name for name in (config.get("spot_legs") or list(live_legs)) if name in live_legs]
+    live_legs = {name: live_legs[name] for name in enabled}
+
+    if ctx.paper:
+        slippage_bps = float(config.get("slippage_bps", 25))
+        paper_state = state["paper"]
+        ctx.hedge = PaperHedge(ctx.live_hedge, paper_state, slippage_bps=slippage_bps)
+
+        def paper_price_fn(leg_name: str):
+            async def price(symbol: str) -> float | None:
+                if leg_name == "hl_spot":
+                    return await ctx.live_hedge.mark_price(symbol)
+                if leg_name == "etherfi":
+                    return await _token_price(WEETH_TOKEN_ID)
+                if leg_name == "ethena":
+                    return await _token_price(SUSDE_TOKEN_ID)
+                return None  # pendle_pt marks at entry value
+
+            return price
+
+        ctx.legs = {
+            name: PaperSpotLeg(
+                leg, paper_state, slippage_bps=slippage_bps, price_fn=paper_price_fn(name)
+            )
+            for name, leg in live_legs.items()
+        }
+    else:
+        ctx.hedge = ctx.live_hedge
+        ctx.legs = live_legs
+
+    ctx.executor = PairExecutor(ctx.hedge, ctx.legs)
+
+    ctx.boros_lock = None
+    rate_lock_cfg = config.get("rate_lock") or {}
+    if need_boros or bool(rate_lock_cfg.get("enabled")):
+        boros = await get_adapter(BorosAdapter, ctx.label)
+        ctx.boros_lock = BorosRateLock(boros)
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# Collection + scoring (orchestration; math in scoring.py)
+# ---------------------------------------------------------------------------
+
+async def collect_market_rows(ctx: Ctx) -> dict[str, dict[str, Any]]:
+    """Per-symbol funding/EMA/oi rows for the whitelist (+ dynamic discovery)."""
+    scoring_cfg = ctx.config.get("scoring") or {}
+    filters = ctx.universe.get("filters") or {}
+    ema_hours = float(scoring_cfg.get("funding_ema_hours", 72))
+
+    snapshot = await ctx.hedge.perp_snapshot()
+    symbols = {str(s).upper() for s in (ctx.universe.get("symbols") or [])}
+
+    delta_lab_funding: dict[str, Any] = {}
+    if bool(ctx.universe.get("allow_dynamic_discovery")):
+        try:
+            screened = await DELTA_LAB_CLIENT.screen_perp(
+                sort="funding_now", order="desc", limit=100, venue="hyperliquid"
+            )
+            for row in screened.get("data", []):
+                sym = str(row.get("base_symbol") or "").upper()
+                if not sym:
+                    continue
+                delta_lab_funding[sym] = row.get("funding_now")
+                if sym in snapshot:
+                    symbols.add(sym)
+        except Exception as exc:
+            logger.warning(f"Delta Lab dynamic discovery unavailable: {exc}")
+
+    now = _now()
+    rows: dict[str, dict[str, Any]] = {}
+    for sym in sorted(symbols):
+        snap = snapshot.get(sym)
+        if snap is None:
+            continue
+        funding_apr_now = normalize_funding_apr(
+            snap["funding_per_interval"], ctx.hedge.funding_interval_hours
+        )
+        ema_key = f"{ctx.hedge.name}:{sym}"
+        ema_state = ctx.state["funding_ema"].get(ema_key) or {}
+        last_ts = ema_state.get("last_sample_ts")
+        dt_hours = min((now - last_ts) / 3600.0, 6.0) if last_ts else 1.0
+        ema = update_ema(
+            ema_state.get("ema_apr"), funding_apr_now, ema_alpha(dt_hours, ema_hours)
+        )
+        ctx.state["funding_ema"][ema_key] = {"ema_apr": ema, "last_sample_ts": now}
+        rows[sym] = {
+            "symbol": sym,
+            "funding_apr_now": funding_apr_now,
+            "funding_ema_apr": ema,
+            "mark_price": snap["mark_price"],
+            "open_interest_usd": snap["open_interest_usd"],
+            "delta_lab_funding_now": delta_lab_funding.get(sym),
+            "last_sample_ts": now,
+        }
+
+    min_oi = float(filters.get("min_oi_usd", 0))
+    min_funding_bps = float(filters.get("min_funding_apr_bps", 0))
+    open_symbols = set(ctx.state["pairs"])
+    return {
+        sym: row
+        for sym, row in rows.items()
+        if sym in open_symbols
+        or (
+            row["open_interest_usd"] >= min_oi
+            and row["funding_ema_apr"] * 10_000 >= min_funding_bps
+        )
+    }
+
+
+async def apply_volatility_filter(
+    ctx: Ctx, rows: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Drop symbols above the realized-vol cap (30d daily). Discover-only."""
+    filters = ctx.universe.get("filters") or {}
+    max_vol_pct = filters.get("max_lookback_volatility_pct")
+    if max_vol_pct is None:
+        return rows
+    end_ms = int(_now() * 1000)
+    start_ms = end_ms - 30 * 86400 * 1000
+    kept: dict[str, dict[str, Any]] = {}
+    for sym, row in rows.items():
+        try:
+            candles = await HYPERLIQUID_DATA_CLIENT.get_candles(sym, start_ms, end_ms, "1d")
+            closes = [float(v) for c in candles if (v := c.get("c")) is not None]
+            if len(closes) < 5:
+                kept[sym] = row
+                continue
+            returns = [math.log(b / a) for a, b in zip(closes, closes[1:], strict=False) if a > 0]
+            mean = sum(returns) / len(returns)
+            var = sum((r - mean) ** 2 for r in returns) / max(len(returns) - 1, 1)
+            vol_pct = math.sqrt(var) * math.sqrt(365) * 100
+            row["realized_vol_pct_30d"] = round(vol_pct, 2)
+            if vol_pct <= float(max_vol_pct) or sym in ctx.state["pairs"]:
+                kept[sym] = row
+        except Exception as exc:
+            logger.warning(f"vol filter unavailable for {sym}: {exc}")
+            kept[sym] = row
+    return kept
+
+
+def _cost_config(ctx: Ctx) -> tuple[float, dict[str, float], float, float]:
+    costs = ctx.config.get("costs") or {}
+    taker = float(costs.get("hedge_taker_fee_bps", DEFAULT_HEDGE_TAKER_FEE_BPS))
+    spot_costs = {**DEFAULT_SPOT_COST_BPS, **(costs.get("spot_cost_bps") or {})}
+    amort_days = float(
+        (ctx.config.get("scoring") or {}).get(
+            "cost_amortization_days", DEFAULT_COST_AMORTIZATION_DAYS
+        )
+    )
+    # Expected slippage per fill for scoring — distinct from `slippage_bps`,
+    # the protective execution tolerance (scoring with the tolerance would
+    # overstate the drag ~5x and block every combo).
+    slippage_cost_bps = float(
+        costs.get("slippage_cost_bps_per_fill", DEFAULT_SLIPPAGE_COST_BPS_PER_FILL)
+    )
+    return taker, spot_costs, amort_days, slippage_cost_bps
+
+
+async def build_combos(
+    ctx: Ctx, rows: dict[str, dict[str, Any]]
+) -> tuple[list[ComboScore], list[dict[str, Any]]]:
+    taker, spot_costs, amort_days, slippage_cost_bps = _cost_config(ctx)
+    priority = [name for name in (ctx.config.get("spot_legs") or []) if name in ctx.legs]
+    combos: list[ComboScore] = []
+    exclusions: list[dict[str, Any]] = []
+    for sym, row in rows.items():
+        for leg_name in priority:
+            leg = ctx.legs[leg_name]
+            try:
+                if not await leg.supports(sym):
+                    continue
+                apy = await leg.yield_apy(sym)
+            except Exception as exc:
+                exclusions.append({"symbol": sym, "leg": leg_name, "reason": str(exc)})
+                continue
+            if apy is None:
+                exclusions.append(
+                    {"symbol": sym, "leg": leg_name, "reason": "yield data unavailable"}
+                )
+                continue
+            # Round trip: hedge entry+exit + spot entry+exit; slippage on all 4 fills.
+            fee_bps = 2 * taker + 2 * spot_costs.get(leg_name, 25.0)
+            combos.append(
+                ComboScore(
+                    venue=ctx.hedge.name,
+                    symbol=sym,
+                    spot_leg=leg_name,
+                    components=CarryComponents(
+                        funding_apr=row["funding_ema_apr"],
+                        spot_leg_apy=float(apy),
+                        fee_apr=cost_apr(fee_bps, amort_days),
+                        slippage_apr=cost_apr(4 * slippage_cost_bps, amort_days),
+                    ),
+                    funding_interval_hours=ctx.hedge.funding_interval_hours,
+                    meta={
+                        "funding_apr_now": row["funding_apr_now"],
+                        "mark_price": row["mark_price"],
+                        "open_interest_usd": row["open_interest_usd"],
+                        "delta_lab_funding_now": row.get("delta_lab_funding_now"),
+                        "realized_vol_pct_30d": row.get("realized_vol_pct_30d"),
+                    },
+                )
+            )
+    return rank_combos(combos), exclusions
+
+
+def _combo_for(combos: list[ComboScore], symbol: str, leg: str) -> ComboScore | None:
+    for combo in combos:
+        if combo.symbol == symbol.upper() and combo.spot_leg == leg:
+            return combo
+    return None
+
+
+def _migration_cost_usd(ctx: Ctx, notional_usd: float, from_leg: str, to_leg: str) -> float:
+    taker, spot_costs, _amort, slippage_cost_bps = _cost_config(ctx)
+    close_bps = taker + spot_costs.get(from_leg, 25.0) + 2 * slippage_cost_bps
+    open_bps = taker + spot_costs.get(to_leg, 25.0) + 2 * slippage_cost_bps
+    gas = sum(EVM_LEG_GAS_USD for leg in (from_leg, to_leg) if leg != "hl_spot")
+    return notional_usd * (close_bps + open_bps) / 10_000 + gas
+
+
+# ---------------------------------------------------------------------------
+# Funding + gas plumbing
+# ---------------------------------------------------------------------------
+
+async def _ensure_hl_funding(ctx: Ctx, needed_usd: float) -> tuple[bool, str]:
+    """Top up the HL account from wallet Arbitrum USDC when short."""
+    free = await ctx.hedge.free_margin_usd()
+    if free >= needed_usd:
+        return True, f"HL free margin ${free:.2f} covers ${needed_usd:.2f}"
+    shortfall = max(needed_usd - free, MIN_DEPOSIT_USD)
+    if ctx.paper:
+        ctx.state["paper"]["usdc"] = float(ctx.state["paper"].get("usdc", 0.0)) + shortfall
+        return True, f"paper: credited ${shortfall:.2f} virtual USDC"
+    wallet = await find_wallet_by_label(ctx.label)
+    if wallet is None:
+        return False, f"wallet {ctx.label!r} not found"
+    sign_cb, _ = await get_wallet_signing_callback(ctx.label)
+    balance = await get_adapter(BalanceAdapter, ctx.main_label, ctx.label)
+    ok, res = await balance.send_to_address(
+        token_id=USDC_ARBITRUM_TOKEN_ID,
+        amount=int(shortfall * 1e6),
+        from_wallet=wallet,
+        to_address=HYPERLIQUID_BRIDGE_ADDRESS,
+        signing_callback=sign_cb,
+    )
+    if not ok:
+        return False, f"USDC bridge to HL failed: {res}"
+    confirmed, final_balance = await ctx.live_hedge.adapter.wait_for_deposit(
+        address=ctx.address, expected_increase=shortfall, timeout_s=240, poll_interval_s=10
+    )
+    if not confirmed:
+        return False, (
+            f"USDC sent to HL bridge but not credited within timeout "
+            f"(HL balance ${final_balance:.2f})"
+        )
+    return True, f"bridged ${shortfall:.2f} USDC to HL (balance ${final_balance:.2f})"
+
+
+def _leg_chain_ids(leg_name: str) -> list[int]:
+    if leg_name in ("etherfi", "ethena"):
+        return [1]
+    if leg_name == "pendle_pt":
+        return [1, 8453, 42161]
+    return []
+
+
+async def _check_gas(ctx: Ctx, chain_ids: list[int]) -> list[int]:
+    """Chains where the wallet lacks native gas."""
+    if ctx.paper:
+        return []
+    starved: list[int] = []
+    for chain_id in chain_ids:
+        try:
+            async with web3_from_chain_id(chain_id) as w3:
+                balance = await w3.eth.get_balance(ctx.address)
+            if balance < MIN_GAS_WEI:
+                starved.append(chain_id)
+        except Exception as exc:
+            logger.warning(f"gas check failed on chain {chain_id}: {exc}")
+    return starved
+
+
+async def _record_ledger(
+    ctx: Ctx,
+    *,
+    kind: str,
+    usd_value: float,
+    data: dict[str, Any],
+    chain_id: int = 42161,
+    token_address: str = "",
+    token_amount: float = 0.0,
+) -> None:
+    if ctx.ledger is None:
+        return
+    try:
+        if kind == "deposit":
+            await ctx.ledger.record_deposit(
+                wallet_address=ctx.address,
+                chain_id=chain_id,
+                token_address=token_address or USDC_MAINNET,
+                token_amount=token_amount or usd_value,
+                usd_value=usd_value,
+                data=data,
+                strategy_name=PATH_SLUG,
+            )
+        else:
+            await ctx.ledger.record_withdrawal(
+                wallet_address=ctx.address,
+                chain_id=chain_id,
+                token_address=token_address or USDC_MAINNET,
+                token_amount=token_amount or usd_value,
+                usd_value=usd_value,
+                data=data,
+                strategy_name=PATH_SLUG,
+            )
+    except Exception as exc:
+        logger.warning(f"ledger record failed ({kind}): {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Pair valuation / status helpers
+# ---------------------------------------------------------------------------
+
+async def _pair_snapshot(ctx: Ctx, symbol: str, pair: dict[str, Any]) -> dict[str, Any]:
+    hedge_pos = await ctx.hedge.short_position(symbol)
+    leg = ctx.legs.get(pair["spot_leg"])
+    spot_pos = await leg.position(symbol) if leg else None
+    spot_usd = spot_pos.usd_value if spot_pos and spot_pos.usd_value is not None else None
+    short_notional = hedge_pos.notional_usd if hedge_pos else 0.0
+    delta_ratio = None
+    if hedge_pos and short_notional > 0 and spot_usd is not None:
+        delta_ratio = (spot_usd - short_notional) / short_notional
+    value = (
+        (spot_usd or 0.0)
+        + (hedge_pos.margin_used_usd if hedge_pos else 0.0)
+        + (hedge_pos.unrealized_pnl_usd if hedge_pos else 0.0)
+    )
+    days_held = (_now() - float(pair.get("opened_ts") or _now())) / 86400.0
+    dwell_hours = days_held * 24.0
+    min_dwell = float((ctx.config.get("rotation") or {}).get("min_dwell_hours", 24))
+    return {
+        "symbol": symbol,
+        "spot_leg": pair["spot_leg"],
+        "venue": pair.get("venue", ctx.hedge.name),
+        "hedge": hedge_pos.to_dict() if hedge_pos else None,
+        "spot": spot_pos.to_dict() if spot_pos else None,
+        "delta_ratio": delta_ratio,
+        "value_usd": round(value, 2),
+        "entry_value_usd": pair.get("entry_value_usd"),
+        "mtm_pnl_usd": (
+            round(value - float(pair["entry_value_usd"]), 2)
+            if pair.get("entry_value_usd") is not None
+            else None
+        ),
+        "accrued_funding_usd_est": round(float(pair.get("accrued_funding_usd", 0.0)), 4),
+        "accrued_spot_yield_usd_est": round(float(pair.get("accrued_spot_yield_usd", 0.0)), 4),
+        "days_held": round(days_held, 2),
+        "next_rotation_eval_in_hours": round(max(min_dwell - dwell_hours, 0.0), 1),
+        "lock": pair.get("lock"),
+    }
+
+
+async def _lock_pnl(ctx: Ctx, pair: dict[str, Any]) -> Any:
+    lock = pair.get("lock")
+    if not lock:
+        return None
+    if ctx.paper:
+        return lock.get("paper_pnl_usd", 0.0)
+    if ctx.boros_lock is None:
+        return None
+    ok, positions = await ctx.boros_lock.lock_positions()
+    if not ok or isinstance(positions, str):
+        return None
+    for pos in positions:
+        if int(pos.get("market_id") or -1) == int(lock.get("market_id") or -2):
+            return pos.get("pnl")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+async def action_discover(ctx: Ctx, top_n: int) -> dict[str, Any]:
+    rows = await collect_market_rows(ctx)
+    rows = await apply_volatility_filter(ctx, rows)
+    combos, exclusions = await build_combos(ctx, rows)
+    save_state(ctx.state)  # persist EMA updates
+    best_by_symbol: dict[str, dict[str, Any]] = {}
+    for combo in combos:
+        best_by_symbol.setdefault(combo.symbol, combo.to_dict())
+    return {
+        "action": "discover",
+        "mode": "paper" if ctx.paper else "live",
+        "ranked": [c.to_dict() for c in combos[:top_n]],
+        "best_spot_leg_by_symbol": best_by_symbol,
+        "excluded": exclusions,
+        "note": (
+            "net_apr = funding EMA + spot-leg yield − fees − slippage (amortized); "
+            "positive funding = shorts receive"
+        ),
+    }
+
+
+async def _quote_payload(ctx: Ctx, symbol: str, size_usd: float) -> dict[str, Any]:
+    sym = symbol.upper()
+    rows = await collect_market_rows(ctx)
+    if sym not in rows:
+        raise SystemExit(
+            f"{sym} not in scannable universe (not listed, below min_oi_usd, or below "
+            "min_funding_apr_bps — check inputs/universe.yaml)"
+        )
+    combos, exclusions = await build_combos(ctx, {sym: rows[sym]})
+    if not combos:
+        raise SystemExit(f"no spot leg available for {sym}: {exclusions}")
+    quotes = []
+    for combo in combos:
+        entry_exit_cost = _migration_cost_usd(ctx, size_usd, combo.spot_leg, combo.spot_leg) / 2
+        round_trip_cost = entry_exit_cost * 2
+        daily_carry = size_usd * combo.net_apr / 365.0
+        quotes.append(
+            {
+                **combo.to_dict(),
+                "size_usd": size_usd,
+                "entry_cost_usd_est": round(entry_exit_cost, 2),
+                "round_trip_cost_usd_est": round(round_trip_cost, 2),
+                "daily_net_carry_usd": round(daily_carry, 4),
+                "breakeven_days": (
+                    round(round_trip_cost / daily_carry, 2) if daily_carry > 0 else None
+                ),
+            }
+        )
+    payload: dict[str, Any] = {
+        "action": "quote",
+        "symbol": sym,
+        "mode": "paper" if ctx.paper else "live",
+        "quotes": quotes,
+        "excluded": exclusions,
+    }
+    rate_lock_cfg = ctx.config.get("rate_lock") or {}
+    if bool(rate_lock_cfg.get("enabled")) and ctx.boros_lock is not None:
+        mark = rows[sym]["mark_price"]
+        ok, lock_quote = await ctx.boros_lock.quote_lock(
+            sym, short_notional_usd=size_usd, short_size_units=size_usd / mark
+        )
+        if ok and isinstance(lock_quote, LockQuote):
+            floating = rows[sym]["funding_ema_apr"]
+            decision = lock_decision(
+                floating,
+                lock_quote.fixed_apr,
+                premium_threshold_bps=int(rate_lock_cfg.get("lock_premium_threshold_apr_bps", 200)),
+                locked=False,
+            )
+            payload["boros_lock"] = {
+                **lock_quote.to_dict(),
+                "floating_ema_apr": floating,
+                "decision": decision.to_dict(),
+            }
+        else:
+            payload["boros_lock"] = {"unavailable": str(lock_quote)}
+    save_state(ctx.state)
+    return payload
+
+
+async def action_deposit(
+    ctx: Ctx,
+    symbol: str,
+    amount: float,
+    gas: float,
+    leg_override: str | None,
+    confirm: bool,
+) -> dict[str, Any]:
+    sym = symbol.upper()
+    risk = ctx.config.get("risk") or {}
+    hedge_cfg = ctx.config.get("hedge") or {}
+    scoring_cfg = ctx.config.get("scoring") or {}
+    if ctx.state["halted"]:
+        raise SystemExit(f"halted: {ctx.state['halt_reason']} — run update --confirm --resume")
+    if bool(ctx.config.get("paused")):
+        raise SystemExit("paused: true in inputs/config.yaml — kill switch active")
+    if sym in ctx.state["pairs"]:
+        raise SystemExit(f"{sym} pair already open — use update/rotate instead")
+    max_position = float(risk.get("max_position_usd", 5_000))
+    if amount > max_position:
+        raise SystemExit(f"amount ${amount:.2f} > max_position_usd ${max_position:.2f}")
+    open_notional = 0.0
+    for open_sym, pair in ctx.state["pairs"].items():
+        snap = await _pair_snapshot(ctx, open_sym, pair)
+        open_notional += (snap.get("hedge") or {}).get("notional_usd") or 0.0
+    max_total = float(risk.get("max_total_notional_usd", 10_000))
+    if open_notional + amount > max_total:
+        raise SystemExit(
+            f"total notional ${open_notional + amount:.2f} would exceed "
+            f"max_total_notional_usd ${max_total:.2f}"
+        )
+    if amount < MIN_ORDER_USD_NOTIONAL:
+        raise SystemExit(f"amount below HL ${MIN_ORDER_USD_NOTIONAL:.0f} order minimum")
+
+    quote = await _quote_payload(ctx, sym, amount)
+    quotes_by_leg = {q["spot_leg"]: q for q in quote["quotes"]}
+    if leg_override:
+        if leg_override not in quotes_by_leg:
+            raise SystemExit(f"leg {leg_override!r} unavailable for {sym}")
+        chosen = quotes_by_leg[leg_override]
+    else:
+        chosen = quote["quotes"][0]
+    min_net_bps = float(scoring_cfg.get("min_net_carry_apr_bps", 1000))
+    if chosen["net_apr"] * 10_000 < min_net_bps:
+        raise SystemExit(
+            f"net carry {chosen['net_apr'] * 10_000:.0f}bps below "
+            f"min_net_carry_apr_bps {min_net_bps:.0f}"
+        )
+
+    leverage = int(hedge_cfg.get("leverage_cap", 3))
+    margin_needed = required_margin_usd(
+        amount, leverage, float(hedge_cfg.get("margin_buffer_pct", 0.25))
+    )
+    leg_name = chosen["spot_leg"]
+    hl_needed = margin_needed + (amount if leg_name == "hl_spot" else 0.0)
+
+    plan = {
+        "action": "deposit",
+        "symbol": sym,
+        "spot_leg": leg_name,
+        "notional_usd": amount,
+        "hedge_margin_usd": round(margin_needed, 2),
+        "hl_funding_needed_usd": round(hl_needed, 2),
+        "quote": chosen,
+        "mode": "paper" if ctx.paper else "live",
+    }
+    if not confirm:
+        return {**plan, "status": "requires_confirmation", "note": "re-run with --confirm"}
+
+    key = idempotency_key(PATH_SLUG, ctx.hedge.name, sym, "deposit", epoch_bucket(_now()))
+    if _already_executed(ctx.state, key):
+        return {**plan, "status": "skipped", "note": f"idempotency key {key} already executed"}
+
+    starved = await _check_gas(ctx, _leg_chain_ids(leg_name))
+    if starved and gas > 0:
+        gas_results = []
+        for chain_id in starved:
+            native = {1: "ethereum-ethereum", 8453: "ethereum-base", 42161: "ethereum-arbitrum"}[
+                chain_id
+            ]
+            ok, res = await ctx.brap.swap_from_token_ids(
+                from_token_id=USDC_ARBITRUM_TOKEN_ID,
+                to_token_id=native,
+                from_address=ctx.address,
+                amount=str(int(gas * 1e6)),
+                strategy_name=PATH_SLUG,
+            )
+            gas_results.append({"chain_id": chain_id, "ok": ok, "result": str(res)[:200]})
+        plan["gas_topups"] = gas_results
+        starved = await _check_gas(ctx, _leg_chain_ids(leg_name))
+    if starved:
+        raise SystemExit(
+            f"no native gas on chains {starved} — fund gas there (or pass --gas) before deposit"
+        )
+
+    ok, msg = await _ensure_hl_funding(ctx, hl_needed)
+    if not ok:
+        raise SystemExit(msg)
+    plan["hl_funding"] = msg
+
+    if ctx.paper and leg_name != "hl_spot":
+        # EVM legs draw from the same virtual USDC pool in paper mode.
+        ctx.state["paper"]["usdc"] = float(ctx.state["paper"].get("usdc", 0.0)) + amount
+
+    slippage = float(ctx.config.get("slippage_bps", 25)) / 10_000
+    ok, report = await ctx.executor.open_pair(
+        sym, leg_name, amount, leverage=leverage, slippage=slippage
+    )
+    plan["execution"] = report
+    if not ok:
+        save_state(ctx.state)
+        if "unhedged_short" in report:
+            await _notify(
+                f"{PATH_SLUG}: unhedged short on {sym}",
+                f"Spot leg {leg_name} failed after the hedge opened. {report.get('error')}",
+            )
+        raise SystemExit(json.dumps(report, default=str))
+
+    _mark_executed(ctx.state, key)
+    hedge_pos = await ctx.hedge.short_position(sym)
+    leg_pos = await ctx.legs[leg_name].position(sym)
+    entry_value = (
+        (leg_pos.usd_value if leg_pos and leg_pos.usd_value is not None else amount)
+        + (hedge_pos.margin_used_usd if hedge_pos else margin_needed)
+    )
+    ctx.state["pairs"][sym] = {
+        "spot_leg": leg_name,
+        "venue": ctx.hedge.name,
+        "opened_ts": _now(),
+        "entry_notional_usd": amount,
+        "entry_value_usd": entry_value,
+        "last_rebalance_ts": None,
+        "accrued_funding_usd": 0.0,
+        "accrued_spot_yield_usd": 0.0,
+        "last_accrual_ts": _now(),
+        "lock": None,
+    }
+    ctx.state["reference_value_usd"] = float(ctx.state["reference_value_usd"]) + entry_value
+    _log_history(ctx.state, {"event": "deposit", "symbol": sym, "leg": leg_name, "usd": amount})
+    await _record_ledger(
+        ctx, kind="deposit", usd_value=amount, data={"idempotency_key": key, "leg": leg_name}
+    )
+    save_state(ctx.state)
+    return {**plan, "status": "executed"}
+
+
+async def _close_pair_full(
+    ctx: Ctx, symbol: str, *, reason: str, confirm: bool
+) -> dict[str, Any]:
+    sym = symbol.upper()
+    pair = ctx.state["pairs"].get(sym)
+    if pair is None:
+        raise SystemExit(f"no open pair for {sym}")
+    before = await _pair_snapshot(ctx, sym, pair)
+    plan = {"symbol": sym, "reason": reason, "before": before}
+    if not confirm:
+        return {**plan, "status": "requires_confirmation"}
+
+    if pair.get("lock") and ctx.boros_lock is not None and not ctx.paper:
+        ok, res = await ctx.boros_lock.unwind_lock(int(pair["lock"]["market_id"]))
+        plan["lock_unwind"] = res
+        if not ok:
+            raise SystemExit(f"Boros lock unwind failed, aborting pair close: {res}")
+    elif pair.get("lock") and ctx.paper:
+        plan["lock_unwind"] = {"paper": True}
+
+    slippage = float(ctx.config.get("slippage_bps", 25)) / 10_000
+    ok, report = await ctx.executor.close_pair(sym, pair["spot_leg"], slippage=slippage)
+    plan["execution"] = report
+    if not ok:
+        save_state(ctx.state)
+        raise SystemExit(json.dumps(report, default=str))
+
+    realized_vs_entry = None
+    if pair.get("entry_value_usd") is not None and before.get("value_usd") is not None:
+        realized_vs_entry = round(before["value_usd"] - float(pair["entry_value_usd"]), 2)
+    plan["reconciliation"] = {
+        "entry_value_usd": pair.get("entry_value_usd"),
+        "exit_value_usd_est": before.get("value_usd"),
+        "realized_vs_entry_usd": realized_vs_entry,
+        "accrued_funding_usd_est": pair.get("accrued_funding_usd"),
+        "accrued_spot_yield_usd_est": pair.get("accrued_spot_yield_usd"),
+    }
+    ctx.state["reference_value_usd"] = max(
+        0.0, float(ctx.state["reference_value_usd"]) - float(pair.get("entry_value_usd") or 0.0)
+    )
+    ctx.state["pairs"].pop(sym, None)
+    _log_history(ctx.state, {"event": "unwind", "symbol": sym, "reason": reason})
+    await _record_ledger(
+        ctx,
+        kind="withdrawal",
+        usd_value=float(before.get("value_usd") or 0.0),
+        data={"reason": reason, "reconciliation": plan["reconciliation"]},
+    )
+    save_state(ctx.state)
+    return {**plan, "status": "executed"}
+
+
+async def _evaluate_rotation(
+    ctx: Ctx, combos: list[ComboScore], *, bypass_dwell: bool
+) -> list[dict[str, Any]]:
+    rotation_cfg = ctx.config.get("rotation") or {}
+    evaluations = []
+    for sym, pair in ctx.state["pairs"].items():
+        current = _combo_for(combos, sym, pair["spot_leg"])
+        candidates = [
+            c for c in combos if not (c.symbol == sym and c.spot_leg == pair["spot_leg"])
+        ]
+        if current is None or not candidates:
+            continue
+        best = candidates[0]
+        snap = await ctx.hedge.short_position(sym)
+        notional = snap.notional_usd if snap else float(pair.get("entry_notional_usd") or 0.0)
+        cost = _migration_cost_usd(ctx, notional, pair["spot_leg"], best.spot_leg)
+        hours_held = (_now() - float(pair.get("opened_ts") or _now())) / 3600.0
+        decision = rotation_decision(
+            current.net_apr,
+            best.net_apr,
+            notional_usd=notional,
+            migration_cost_usd=cost,
+            threshold_apr_bps=int(rotation_cfg.get("threshold_apr_bps", 400)),
+            max_breakeven_hours=float(rotation_cfg.get("max_breakeven_hours", 48)),
+            min_dwell_hours=float(rotation_cfg.get("min_dwell_hours", 24)),
+            hours_held=hours_held,
+            bypass_dwell=bypass_dwell,
+        )
+        evaluations.append(
+            {
+                "symbol": sym,
+                "current": current.to_dict(),
+                "candidate": best.to_dict(),
+                "migration_cost_usd": round(cost, 2),
+                "decision": decision.to_dict(),
+            }
+        )
+    return evaluations
+
+
+async def _execute_rotation(ctx: Ctx, evaluation: dict[str, Any]) -> dict[str, Any]:
+    sym = evaluation["symbol"]
+    candidate = evaluation["candidate"]
+    key = idempotency_key(
+        PATH_SLUG, ctx.hedge.name, sym, f"rotate_to_{candidate['symbol']}", epoch_bucket(_now())
+    )
+    if _already_executed(ctx.state, key):
+        return {"status": "skipped", "note": f"idempotency key {key} already executed"}
+    pair = ctx.state["pairs"][sym]
+    notional = float(pair.get("entry_notional_usd") or 0.0)
+    closed = await _close_pair_full(ctx, sym, reason="rotation", confirm=True)
+    recovered = float(
+        (closed.get("reconciliation") or {}).get("exit_value_usd_est") or notional
+    )
+    opened = await action_deposit(
+        ctx,
+        candidate["symbol"],
+        min(recovered, notional) if notional else recovered,
+        gas=0.0,
+        leg_override=candidate["spot_leg"],
+        confirm=True,
+    )
+    _mark_executed(ctx.state, key)
+    _log_history(
+        ctx.state,
+        {"event": "rotation", "from": sym, "to": candidate["symbol"], "leg": candidate["spot_leg"]},
+    )
+    save_state(ctx.state)
+    return {"status": "executed", "closed": closed, "opened": opened}
+
+
+async def _accrue_estimates(ctx: Ctx, rows: dict[str, dict[str, Any]]) -> None:
+    now = _now()
+    for sym, pair in ctx.state["pairs"].items():
+        row = rows.get(sym)
+        last = float(pair.get("last_accrual_ts") or now)
+        hours = max(0.0, (now - last) / 3600.0)
+        if row is None or hours <= 0:
+            pair["last_accrual_ts"] = now
+            continue
+        snap = await ctx.hedge.short_position(sym)
+        notional = snap.notional_usd if snap else float(pair.get("entry_notional_usd") or 0.0)
+        pair["accrued_funding_usd"] = float(pair.get("accrued_funding_usd", 0.0)) + (
+            notional * row["funding_apr_now"] * hours / HOURS_PER_YEAR
+        )
+        leg = ctx.legs.get(pair["spot_leg"])
+        apy = await leg.yield_apy(sym) if leg else None
+        if apy:
+            pair["accrued_spot_yield_usd"] = float(pair.get("accrued_spot_yield_usd", 0.0)) + (
+                notional * float(apy) * hours / HOURS_PER_YEAR
+            )
+        pair["last_accrual_ts"] = now
+
+
+async def _boros_step(
+    ctx: Ctx, rows: dict[str, dict[str, Any]], *, confirm: bool
+) -> list[dict[str, Any]]:
+    rate_lock_cfg = ctx.config.get("rate_lock") or {}
+    if not bool(rate_lock_cfg.get("enabled")) or ctx.boros_lock is None:
+        return []
+    threshold = int(rate_lock_cfg.get("lock_premium_threshold_apr_bps", 200))
+    results = []
+    for sym, pair in ctx.state["pairs"].items():
+        row = rows.get(sym)
+        if row is None:
+            continue
+        snap = await ctx.hedge.short_position(sym)
+        if snap is None:
+            continue
+        locked = bool(pair.get("lock"))
+        if locked:
+            fixed = float(pair["lock"]["fixed_apr"])
+            decision = lock_decision(
+                row["funding_ema_apr"], fixed, premium_threshold_bps=threshold, locked=True
+            )
+            if decision.action == "unwind" and confirm:
+                if ctx.paper:
+                    pair["lock"] = None
+                    results.append({"symbol": sym, "action": "unwind", "paper": True})
+                else:
+                    ok, res = await ctx.boros_lock.unwind_lock(int(pair["lock"]["market_id"]))
+                    if ok:
+                        pair["lock"] = None
+                    results.append({"symbol": sym, "action": "unwind", "ok": ok, "result": res})
+            else:
+                results.append({"symbol": sym, "action": decision.action, **decision.to_dict()})
+            continue
+        ok, quote = await ctx.boros_lock.quote_lock(
+            sym, short_notional_usd=snap.notional_usd, short_size_units=snap.size_units
+        )
+        if not ok or not isinstance(quote, LockQuote):
+            results.append({"symbol": sym, "action": "none", "note": str(quote)})
+            continue
+        decision = lock_decision(
+            row["funding_ema_apr"], quote.fixed_apr, premium_threshold_bps=threshold, locked=False
+        )
+        if decision.action == "open" and confirm:
+            if ctx.paper:
+                pair["lock"] = {**quote.to_dict(), "opened_ts": _now(), "paper": True}
+                results.append({"symbol": sym, "action": "open", "paper": True, "quote": quote.to_dict()})
+            else:
+                ok_open, res = await ctx.boros_lock.open_lock(quote)
+                if ok_open:
+                    pair["lock"] = {**quote.to_dict(), "opened_ts": _now()}
+                results.append({"symbol": sym, "action": "open", "ok": ok_open, "result": res})
+        else:
+            results.append(
+                {"symbol": sym, "action": decision.action, **decision.to_dict(), "quote": quote.to_dict()}
+            )
+    return results
+
+
+async def action_update(ctx: Ctx, *, confirm: bool, resume: bool) -> dict[str, Any]:
+    config = ctx.config
+    risk = config.get("risk") or {}
+    hedge_cfg = config.get("hedge") or {}
+    scoring_cfg = config.get("scoring") or {}
+    report: dict[str, Any] = {
+        "action": "update",
+        "mode": "paper" if ctx.paper else "live",
+        "confirm": confirm,
+    }
+
+    if ctx.state["halted"] and not resume:
+        report["status"] = "halted"
+        report["halt_reason"] = ctx.state["halt_reason"]
+        report["note"] = "re-run with --confirm --resume after reviewing the halt"
+        return report
+    if resume and confirm:
+        ctx.state["halted"] = False
+        ctx.state["halt_reason"] = None
+        save_state(ctx.state)
+        report["resumed"] = True
+
+    # 1. Collect (also refreshes EMA state). Failure → stale path below.
+    rows: dict[str, dict[str, Any]] = {}
+    collect_error = None
+    try:
+        rows = await collect_market_rows(ctx)
+    except Exception as exc:
+        collect_error = str(exc)
+        logger.error(f"market collection failed: {exc}")
+
+    # 2. Safety rails run before any execution step, every cycle.
+    rails: dict[str, Any] = {}
+    stale_intervals = float(risk.get("stale_data_intervals", 2))
+    stale_syms = [
+        sym
+        for sym in ctx.state["pairs"]
+        if is_stale(
+            (ctx.state["funding_ema"].get(f"{ctx.hedge.name}:{sym}") or {}).get("last_sample_ts"),
+            _now(),
+            funding_interval_hours=ctx.hedge.funding_interval_hours,
+            max_intervals=stale_intervals,
+        )
+    ]
+    rotation_frozen = bool(stale_syms) or collect_error is not None
+    rails["stale"] = {
+        "symbols": stale_syms,
+        "collect_error": collect_error,
+        "rotation_frozen": rotation_frozen,
+    }
+    if rotation_frozen and not ctx.state.get("stale_alerted"):
+        await _notify(
+            f"{PATH_SLUG}: stale funding data",
+            f"Rotation frozen. stale={stale_syms} collect_error={collect_error}",
+        )
+        ctx.state["stale_alerted"] = True
+    elif not rotation_frozen:
+        ctx.state["stale_alerted"] = False
+
+    # Kill switch: only delta + liquidation checks below, then return.
+    paused = bool(config.get("paused"))
+
+    liq_buffer = float(risk.get("liq_buffer_pct", 0.15))
+    leverage_cap = int(hedge_cfg.get("leverage_cap", 3))
+    liq_reports = []
+    total_value = 0.0
+    for sym, pair in list(ctx.state["pairs"].items()):
+        snap_pos = await ctx.hedge.short_position(sym)
+        pair_snap = await _pair_snapshot(ctx, sym, pair)
+        total_value += float(pair_snap.get("value_usd") or 0.0)
+        if snap_pos is None:
+            continue
+        liq_distance = snap_pos.liq_distance_pct
+        if liq_distance is None:
+            continue
+        margin_topup = required_margin_usd(snap_pos.notional_usd, leverage_cap, 0.0) * 0.25
+        wallet_arb_usdc = 0.0
+        if not ctx.paper:
+            try:
+                wallet_arb_usdc = (
+                    await get_token_balance(
+                        "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                        chain_id=42161,
+                        wallet_address=ctx.address,
+                    )
+                ) / 1e6
+            except Exception:
+                wallet_arb_usdc = 0.0
+        else:
+            wallet_arb_usdc = margin_topup  # paper can always credit
+        act = liquidation_action(
+            liq_distance,
+            liq_buffer_pct=liq_buffer,
+            available_margin_usd=wallet_arb_usdc,
+            margin_topup_usd=margin_topup,
+        )
+        entry: dict[str, Any] = {
+            "symbol": sym,
+            "liq_distance_pct": round(liq_distance, 4),
+            "action": act,
+        }
+        if act != "ok" and confirm:
+            if act == "add_margin":
+                ok, msg = await _ensure_hl_funding(
+                    ctx, await ctx.hedge.free_margin_usd() + margin_topup
+                )
+                entry["executed"] = msg if ok else f"margin add failed: {msg}"
+                if not ok:
+                    act = "reduce"
+            if act == "reduce":
+                slippage = float(config.get("slippage_bps", 25)) / 10_000
+                ok, res = await ctx.hedge.close_short(
+                    sym, snap_pos.size_units * 0.25, slippage
+                )
+                entry["executed_reduce"] = res
+        liq_reports.append(entry)
+
+        # Leverage-cap re-check: drift can push effective leverage above cap.
+        if snap_pos.margin_used_usd > 0:
+            effective = snap_pos.notional_usd / snap_pos.margin_used_usd
+            if effective > leverage_cap * 1.25 and confirm and not paused:
+                excess_units = snap_pos.size_units * (1 - leverage_cap / effective)
+                slippage = float(config.get("slippage_bps", 25)) / 10_000
+                ok, res = await ctx.hedge.close_short(sym, excess_units, slippage)
+                liq_reports.append(
+                    {"symbol": sym, "action": "leverage_cap_reduce", "result": res}
+                )
+    rails["liquidation"] = liq_reports
+
+    reference = float(ctx.state["reference_value_usd"] or 0.0)
+    max_dd = float(risk.get("max_drawdown_pct", 8))
+    if ctx.state["pairs"] and drawdown_halted(reference, total_value, max_dd):
+        ctx.state["halted"] = True
+        ctx.state["halt_reason"] = (
+            f"drawdown: value ${total_value:.2f} vs reference ${reference:.2f} "
+            f"exceeds {max_dd}%"
+        )
+        save_state(ctx.state)
+        await _notify(f"{PATH_SLUG}: drawdown halt", ctx.state["halt_reason"])
+        report["rails"] = rails
+        report["status"] = "halted"
+        report["halt_reason"] = ctx.state["halt_reason"]
+        return report
+    rails["drawdown"] = {
+        "reference_usd": reference,
+        "value_usd": round(total_value, 2),
+        "max_drawdown_pct": max_dd,
+    }
+    report["rails"] = rails
+
+    if paused:
+        report["status"] = "paused"
+        report["note"] = "kill switch active: only delta + liquidation checks ran"
+        save_state(ctx.state)
+        return report
+
+    await _accrue_estimates(ctx, rows)
+
+    # 3-5. Score + negative-carry exit.
+    combos, exclusions = await build_combos(ctx, rows) if rows else ([], [])
+    report["excluded_combos"] = exclusions
+    best_apr = combos[0].net_apr if combos else 0.0
+    floor_bps = int(scoring_cfg.get("unwind_carry_floor_bps", 200))
+    grace_hours = float(scoring_cfg.get("grace_hours", 12))
+    should_exit, since = negative_carry_exit(
+        best_apr,
+        floor_bps=floor_bps,
+        below_floor_since_ts=ctx.state.get("below_floor_since_ts"),
+        now_ts=_now(),
+        grace_hours=grace_hours,
+    )
+    ctx.state["below_floor_since_ts"] = since
+    report["negative_carry"] = {
+        "best_net_apr": best_apr,
+        "floor_bps": floor_bps,
+        "below_floor_since_ts": since,
+        "exit": should_exit,
+    }
+    if should_exit and ctx.state["pairs"]:
+        if confirm:
+            unwinds = [
+                await _close_pair_full(ctx, sym, reason="negative_carry", confirm=True)
+                for sym in list(ctx.state["pairs"])
+            ]
+            ctx.state["below_floor_since_ts"] = None
+            report["negative_carry"]["unwinds"] = unwinds
+        else:
+            report["negative_carry"]["planned"] = "unwind all pairs (requires --confirm)"
+        save_state(ctx.state)
+        report["status"] = "executed" if confirm else "requires_confirmation"
+        return report
+
+    # 6. Rotation (frozen while data is stale).
+    if not rotation_frozen:
+        evaluations = await _evaluate_rotation(ctx, combos, bypass_dwell=False)
+        report["rotation"] = evaluations
+        migrations = [e for e in evaluations if e["decision"]["migrate"]]
+        if migrations:
+            if confirm:
+                # One migration per cycle keeps the blast radius bounded.
+                report["rotation_executed"] = await _execute_rotation(ctx, migrations[0])
+            else:
+                report["rotation_planned"] = migrations
+    else:
+        report["rotation"] = "frozen (stale data)"
+
+    # 7. Delta check with churn guard.
+    band_pct = float(hedge_cfg.get("target_delta_band_pct", 1.5))
+    delta_reports = []
+    for sym, pair in ctx.state["pairs"].items():
+        pair_snap = await _pair_snapshot(ctx, sym, pair)
+        delta_ratio = pair_snap.get("delta_ratio")
+        if delta_ratio is None:
+            continue
+        last_reb = pair.get("last_rebalance_ts")
+        hours_since = (_now() - last_reb) / 3600.0 if last_reb else None
+        if delta_rebalance_decision(
+            delta_ratio, band_pct=band_pct, hours_since_last_rebalance=hours_since
+        ):
+            entry = {"symbol": sym, "delta_ratio": round(delta_ratio, 4), "action": "rebalance"}
+            if confirm:
+                slippage = float(config.get("slippage_bps", 25)) / 10_000
+                hedge_pos = await ctx.hedge.short_position(sym)
+                delta_usd = abs(delta_ratio) * (hedge_pos.notional_usd if hedge_pos else 0.0)
+                if delta_usd >= MIN_ORDER_USD_NOTIONAL and hedge_pos:
+                    if delta_ratio > 0:
+                        ok, res = await ctx.hedge.open_short(sym, delta_usd, slippage)
+                    else:
+                        units = delta_usd / (hedge_pos.mark_price or 1.0)
+                        ok, res = await ctx.hedge.close_short(sym, units, slippage)
+                    entry["executed"] = res
+                    pair["last_rebalance_ts"] = _now()
+                else:
+                    entry["note"] = "delta below HL order minimum"
+            delta_reports.append(entry)
+    report["delta"] = delta_reports
+
+    # 8. Boros rate-lock decision.
+    report["rate_lock"] = await _boros_step(ctx, rows, confirm=confirm)
+
+    # 9. Persist state (EMA, accruals, executed keys are the ledger of record
+    # for idempotency; capital flows were recorded per action).
+    save_state(ctx.state)
+    report["status"] = "executed" if confirm else "evaluated"
+    return report
+
+
+async def action_rotate(ctx: Ctx, *, force: bool, confirm: bool) -> dict[str, Any]:
+    rows = await collect_market_rows(ctx)
+    combos, exclusions = await build_combos(ctx, rows)
+    evaluations = await _evaluate_rotation(ctx, combos, bypass_dwell=force)
+    save_state(ctx.state)
+    report: dict[str, Any] = {
+        "action": "rotate",
+        "force": force,
+        "evaluations": evaluations,
+        "excluded_combos": exclusions,
+    }
+    migrations = [e for e in evaluations if e["decision"]["migrate"]]
+    if not migrations:
+        report["status"] = "no_migration"
+        return report
+    if not confirm:
+        report["status"] = "requires_confirmation"
+        return report
+    report["executed"] = await _execute_rotation(ctx, migrations[0])
+    report["status"] = "executed"
+    return report
+
+
+async def action_lock(
+    ctx: Ctx, symbol: str, tenor: float | None, *, confirm: bool
+) -> dict[str, Any]:
+    sym = symbol.upper()
+    pair = ctx.state["pairs"].get(sym)
+    if pair is None:
+        raise SystemExit(f"no open pair for {sym} — locks size to the short leg")
+    if pair.get("lock"):
+        raise SystemExit(f"{sym} already locked (market {pair['lock']['market_id']})")
+    if ctx.boros_lock is None:
+        raise SystemExit("Boros unavailable — set rate_lock.enabled or retry")
+    snap = await ctx.hedge.short_position(sym)
+    if snap is None:
+        raise SystemExit(f"no live short for {sym}")
+    ok, quote = await ctx.boros_lock.quote_lock(
+        sym,
+        short_notional_usd=snap.notional_usd,
+        short_size_units=snap.size_units,
+        target_tenor_days=tenor,
+    )
+    if not ok or not isinstance(quote, LockQuote):
+        raise SystemExit(str(quote))
+    payload = {"action": "lock", "symbol": sym, "quote": quote.to_dict()}
+    if not confirm:
+        return {**payload, "status": "requires_confirmation"}
+    if ctx.paper:
+        pair["lock"] = {**quote.to_dict(), "opened_ts": _now(), "paper": True}
+        save_state(ctx.state)
+        return {**payload, "status": "executed", "paper": True}
+    ok, res = await ctx.boros_lock.open_lock(quote)
+    if not ok:
+        raise SystemExit(json.dumps(res, default=str))
+    pair["lock"] = {**quote.to_dict(), "opened_ts": _now()}
+    _log_history(ctx.state, {"event": "lock", "symbol": sym, "market_id": quote.market_id})
+    save_state(ctx.state)
+    return {**payload, "status": "executed", "result": res}
+
+
+async def action_unlock(ctx: Ctx, symbol: str, *, confirm: bool) -> dict[str, Any]:
+    sym = symbol.upper()
+    pair = ctx.state["pairs"].get(sym)
+    if pair is None or not pair.get("lock"):
+        raise SystemExit(f"no lock open for {sym}")
+    payload = {"action": "unlock", "symbol": sym, "lock": pair["lock"]}
+    if not confirm:
+        return {**payload, "status": "requires_confirmation"}
+    if ctx.paper:
+        pair["lock"] = None
+        save_state(ctx.state)
+        return {**payload, "status": "executed", "paper": True}
+    if ctx.boros_lock is None:
+        raise SystemExit("Boros unavailable")
+    ok, res = await ctx.boros_lock.unwind_lock(int(pair["lock"]["market_id"]))
+    if not ok:
+        raise SystemExit(json.dumps(res, default=str))
+    pair["lock"] = None
+    _log_history(ctx.state, {"event": "unlock", "symbol": sym})
+    save_state(ctx.state)
+    return {**payload, "status": "executed", "result": res}
+
+
+async def action_status(ctx: Ctx) -> dict[str, Any]:
+    pairs = []
+    for sym, pair in ctx.state["pairs"].items():
+        snap = await _pair_snapshot(ctx, sym, pair)
+        snap["lock_pnl_usd"] = await _lock_pnl(ctx, pair)
+        ema = ctx.state["funding_ema"].get(f"{ctx.hedge.name}:{sym}") or {}
+        snap["funding_ema_apr"] = ema.get("ema_apr")
+        pairs.append(snap)
+    free_margin = None
+    try:
+        free_margin = await ctx.hedge.free_margin_usd()
+    except Exception as exc:
+        logger.warning(f"free margin read failed: {exc}")
+    return {
+        "action": "status",
+        "mode": "paper" if ctx.paper else "live",
+        "wallet": ctx.label,
+        "address": ctx.address,
+        "halted": ctx.state["halted"],
+        "halt_reason": ctx.state["halt_reason"],
+        "paused": bool(ctx.config.get("paused")),
+        "pairs": pairs,
+        "hl_free_margin_usd": free_margin,
+        "reference_value_usd": ctx.state["reference_value_usd"],
+        "below_floor_since_ts": ctx.state["below_floor_since_ts"],
+        "paper_state": ctx.state["paper"] if ctx.paper else None,
+        "recent_history": ctx.state["history"][-10:],
+    }
+
+
+async def action_unwind(ctx: Ctx, symbol: str | None, *, confirm: bool) -> dict[str, Any]:
+    targets = [symbol.upper()] if symbol else list(ctx.state["pairs"])
+    if not targets:
+        return {"action": "unwind", "status": "no_open_pairs"}
+    results = [
+        await _close_pair_full(ctx, sym, reason="manual_unwind", confirm=confirm)
+        for sym in targets
+    ]
+    return {
+        "action": "unwind",
+        "status": "executed" if confirm else "requires_confirmation",
+        "pairs": results,
+    }
+
+
+async def action_exit(ctx: Ctx, *, confirm: bool) -> dict[str, Any]:
+    if ctx.state["pairs"]:
+        raise SystemExit(
+            f"open pairs remain: {list(ctx.state['pairs'])} — run unwind first, then exit"
+        )
+    report: dict[str, Any] = {"action": "exit", "mode": "paper" if ctx.paper else "live"}
+    if ctx.paper:
+        report["paper_final"] = ctx.state["paper"]
+        report["status"] = "executed"
+        return report
+    free = await ctx.hedge.free_margin_usd()
+    steps = []
+    plan = {"hl_withdraw_usd": round(free, 2), "transfer_to": ctx.main_label}
+    if not confirm:
+        return {**report, "plan": plan, "status": "requires_confirmation"}
+    if free > 2.0:  # HL withdraw carries a ~$1 fee; dust isn't worth it
+        ok, res = await ctx.live_hedge.adapter.withdraw(amount=free, address=ctx.address)
+        steps.append({"step": "hl_withdraw", "ok": ok, "result": str(res)[:200]})
+        if not ok:
+            raise SystemExit(f"HL withdraw failed: {res}")
+    if ctx.label != ctx.main_label:
+        main_wallet = await find_wallet_by_label(ctx.main_label)
+        main_address = str((main_wallet or {}).get("address") or "")
+        if not main_address:
+            raise SystemExit(f"main wallet {ctx.main_label!r} has no address")
+        sign_cb, _ = await get_wallet_signing_callback(ctx.label)
+        wallet = await find_wallet_by_label(ctx.label)
+        if wallet is None:
+            raise SystemExit(f"wallet {ctx.label!r} not found")
+        balance = await get_adapter(BalanceAdapter, ctx.main_label, ctx.label)
+        for token_id, chain_id, address, decimals in (
+            (USDC_ARBITRUM_TOKEN_ID, 42161, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6),
+            ("usd-coin-ethereum", 1, USDC_MAINNET, 6),
+        ):
+            raw = await get_token_balance(address, chain_id=chain_id, wallet_address=ctx.address)
+            if raw <= 0:
+                continue
+            ok, res = await balance.send_to_address(
+                token_id=token_id,
+                amount=raw,
+                from_wallet=wallet,
+                to_address=main_address,
+                signing_callback=sign_cb,
+            )
+            steps.append(
+                {"step": f"transfer_{token_id}", "ok": ok, "usd": raw / 10**decimals}
+            )
+            if not ok:
+                raise SystemExit(f"transfer {token_id} failed: {res}")
+    else:
+        steps.append({"step": "transfer", "note": "operating wallet is the main wallet"})
+    await _record_ledger(ctx, kind="withdrawal", usd_value=free, data={"event": "exit"})
+    _log_history(ctx.state, {"event": "exit"})
+    save_state(ctx.state)
+    return {**report, "steps": steps, "status": "executed"}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--action",
+        required=True,
+        choices=[
+            "discover", "quote", "deposit", "update", "rotate",
+            "lock", "unlock", "status", "unwind", "exit",
+        ],
+    )
+    parser.add_argument("--symbol", help="asset symbol, e.g. ETH")
+    parser.add_argument("--size", type=float, default=1000.0, help="quote size in USD")
+    parser.add_argument("--amount", type=float, help="deposit notional in USD")
+    parser.add_argument("--gas", type=float, default=0.0, help="USD of USDC to convert to gas")
+    parser.add_argument("--leg", help="override spot leg selection for deposit")
+    parser.add_argument("--top", type=int, default=10, help="rows for discover")
+    parser.add_argument("--tenor", type=float, help="target Boros tenor in days for lock")
+    parser.add_argument("--force", action="store_true", help="rotate: bypass dwell (never breakeven)")
+    parser.add_argument("--confirm", action="store_true", help="execute fund-moving steps")
+    parser.add_argument("--resume", action="store_true", help="update: clear a drawdown halt")
+    return parser
+
+
+async def run(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_yaml("config.yaml")
+    universe = load_yaml("universe.yaml")
+    state = load_state()
+    need_boros = args.action in ("lock", "unlock")
+    ctx = await build_ctx(config, universe, state, need_boros=need_boros)
+
+    if args.action == "discover":
+        return await action_discover(ctx, args.top)
+    if args.action == "quote":
+        if not args.symbol:
+            raise SystemExit("--symbol required for quote")
+        return await _quote_payload(ctx, args.symbol, args.size)
+    if args.action == "deposit":
+        if not args.symbol or args.amount is None:
+            raise SystemExit("--symbol and --amount required for deposit")
+        return await action_deposit(
+            ctx, args.symbol, args.amount, args.gas, args.leg, args.confirm
+        )
+    if args.action == "update":
+        return await action_update(ctx, confirm=args.confirm, resume=args.resume)
+    if args.action == "rotate":
+        return await action_rotate(ctx, force=args.force, confirm=args.confirm)
+    if args.action == "lock":
+        if not args.symbol:
+            raise SystemExit("--symbol required for lock")
+        return await action_lock(ctx, args.symbol, args.tenor, confirm=args.confirm)
+    if args.action == "unlock":
+        if not args.symbol:
+            raise SystemExit("--symbol required for unlock")
+        return await action_unlock(ctx, args.symbol, confirm=args.confirm)
+    if args.action == "status":
+        return await action_status(ctx)
+    if args.action == "unwind":
+        return await action_unwind(ctx, args.symbol, confirm=args.confirm)
+    if args.action == "exit":
+        return await action_exit(ctx, confirm=args.confirm)
+    raise SystemExit(f"unknown action {args.action}")
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    emit(asyncio.run(run(args)))
+
+
+if __name__ == "__main__":
+    main()

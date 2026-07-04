@@ -1,0 +1,50 @@
+# Leave blank to use the session-connected wallet (recommended for hosted runs).
+# Set a label only to pin a specific wallet from config.json.
+wallet:
+# Optional dedicated wallet label; when set and present, all positions are
+# operated from it and `exit` transfers the settled USDC back to the main wallet.
+strategy_wallet:
+mode: live                                # "paper" | "live" — 48h paper run required before live pilot
+paused: false                             # kill switch: update() no-ops except delta + liquidation checks
+hedge:
+  venue: hyperliquid                      # abstraction slot; CCXT venues land v1.1
+  target_delta_band_pct: 1.5              # rebalance hedge if |delta|/notional exceeds this
+  leverage_cap: 3
+  margin_buffer_pct: 0.25                 # free margin kept on hedge venue to survive funding flips
+spot_legs:                                # allowed long-leg venues, priority order; scorer may override by yield
+  - pendle_pt
+  - etherfi
+  - ethena
+  - hl_spot
+scoring:
+  funding_ema_hours: 72                   # score on rolling EMA, not spot rate — don't chase spikes
+  min_net_carry_apr_bps: 1000            # don't open below 10% net stacked APR
+  unwind_carry_floor_bps: 200             # unwind when net carry < 2%…
+  grace_hours: 12                         # …persisting this long (negative-carry exit)
+  cost_amortization_days: 30              # horizon for amortizing entry/exit costs into the APR score
+rotation:
+  threshold_apr_bps: 400                  # migrate only if candidate − current > 4% APR
+  max_breakeven_hours: 48                 # AND migration cost / incremental hourly carry < this
+  min_dwell_hours: 24                     # hysteresis: minimum hold per position
+risk:
+  liq_buffer_pct: 0.15                    # if distance-to-liquidation < 15%: add margin first, reduce second
+  max_drawdown_pct: 8                     # mark-to-market halt, explicit --resume to continue
+  max_position_usd: 5000
+  max_total_notional_usd: 10000
+  stale_data_intervals: 2                 # funding data older than 2 intervals → freeze rotation, alert
+rate_lock:
+  enabled: false
+  lock_premium_threshold_apr_bps: 200     # lock via Boros when floating > implied fixed by 2% for the tenor
+pendle:
+  min_liquidity_usd: 250000
+  min_days_to_expiry: 7
+costs:                                    # per-side execution-cost estimates (bps) for the carry score
+  hedge_taker_fee_bps: 4.5
+  slippage_cost_bps_per_fill: 5           # EXPECTED slippage for scoring (slippage_bps below is the protective tolerance)
+  spot_cost_bps:
+    hl_spot: 4.5
+    pendle_pt: 30
+    etherfi: 25
+    ethena: 25
+slippage_bps: 25                          # execution tolerance per fill (also the paper-mode fill model)
+ledger_record: true
