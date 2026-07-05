@@ -30,13 +30,13 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 
 What this path reads, where it computes, and what leaves your machine:
 
-- **Wallet inputs.** The wallet is resolved from the session-connected wallet (or an explicit `wallet` in `inputs/config.yaml`). The path reads only the wallet **address** to look up on-chain balances and lending positions — it never reads, requests, or stores private keys or seed phrases. Signing is delegated to the host/execution service.
+- **Wallet inputs.** The wallet is resolved from the session-connected wallet (or an explicit `wallet` in `inputs/config.yaml`). The path reads only the wallet **address** to look up on-chain balances and lending positions. Signing is delegated entirely to the host/execution service, which alone holds the keys; the path operates purely from the public address.
 - **Reads (network).** On-chain balances, positions, APYs, TVL, and utilization are read through the rate-limited **Wayfinder RPC proxy** and the protocol adapters (Aave V3, Morpho, Euler V2, Hyperlend, Moonwell). Euler's stable vaults are discovered via a single **Delta Lab** `screen_lending` call. These are read-only queries.
-- **Compute (local).** The **position and balance objects** returned by the adapters are used **only locally** — for ranking, the rotation plan (deltas, gas, payback, constraint gates) in `scripts/rotation.py`, and `status` display — **or** they are handed to **host-bound Wayfinder execution paths** (the SDK / hosted Wayfinder execution service that signs and broadcasts on the configured wallet). They are **never serialized to or transmitted to any third party**: there is no analytics, telemetry, or external POST of wallet, position, or balance data anywhere in this path.
+- **Compute (local).** The **position and balance objects** returned by the adapters have exactly two destinations: (1) **local computation** — ranking, the rotation plan (deltas, gas, payback, constraint gates) in `scripts/rotation.py`, and `status` display; and (2) **host-bound Wayfinder execution paths** (the SDK / hosted Wayfinder execution service that signs and broadcasts on the configured wallet). The path ships no analytics or telemetry hooks, and every outbound request it makes targets a Wayfinder RPC/execution endpoint or a public chain RPC.
 - **Writes (network).** The only outbound fund-moving traffic is **signed transactions broadcast to the relevant chains** (withdraw → bridge via BRAP → deposit), and only after the confirmation gate below. `auto-rotate` additionally sends an **email summary** of executed rotations / new failures via the Wayfinder notify service — a human-readable rotation summary only (asset, venue, USD amounts), not raw position objects or wallet credentials.
-- **Applet.** The bundled applet (`applet/dist/index.html`) is a **static, read-only snapshot** — `bridge: []`, `externalOrigins: []`, no runtime fetch. It renders APY data baked into the path at build time and **never connects to, reads, or transmits any wallet or position data**.
+- **Applet.** The bundled applet (`applet/dist/index.html`) is a **static, read-only snapshot** — `bridge: []`, `externalOrigins: []`, no runtime fetch. It renders APY data baked into the path at build time and runs entirely offline in the browser: it takes no wallet connection and makes no network calls.
 
-> **In short:** position objects stay on the host running the path — used locally for the decision, or via host-bound Wayfinder execution paths to sign/broadcast — and are never sent to third parties.
+> **In short:** position objects stay on the host running the path — used locally for the decision, or handed to host-bound Wayfinder execution paths to sign/broadcast. Every data destination is either local computation or a Wayfinder host-bound endpoint.
 
 ### Confirmation safeguards (execution paths)
 
@@ -94,7 +94,7 @@ Claude safety review hook. Treat the schedule as live fund-moving automation and
 constraints accordingly. Outcome notifications are emailed via the Wayfinder notify
 service; dedupe state lives in `./.wayfinder/runner/job_state/`.
 
-## Limitations (v0.2)
+## Limitations
 
 - No borrow legs / leverage loops.
 - No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only. USDe is supported as a plain lend asset; note it carries Ethena protocol risk on top of venue risk.

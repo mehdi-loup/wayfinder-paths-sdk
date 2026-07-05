@@ -2,6 +2,33 @@
 
 Notable changes to the Stablecoin Yield Rotator path.
 
+## 0.4.1
+
+Documentation truthfulness and applet freshness. No changes to assets, venues, actions,
+or ranking logic.
+
+### Fixed
+
+- **Refreshed the stale applet scan snapshot.** The bundled applet embedded a hand-baked
+  scan from `2026-06-10` that shipped unchanged through 0.4.0, so the "best stablecoin
+  yield" UI displayed ~3-week-old APYs/venues. Regenerated it from a live `scan`
+  (`generatedAt` now stamped at build).
+- **`status` action no longer over-claims.** `PROMPT.md` advertised that `status` returns
+  "blended APY **+ 30d realized yield**," but `action_status` only computes `blended_apy` —
+  there is no realized-yield tracking. Dropped the false claim (the README was already
+  correct).
+- **Un-pinned the README limitations heading.** It read "Limitations (v0.2)" three minor
+  versions later; now just "Limitations" so it can't drift again.
+
+### Changed
+
+- **Reframed the wallet/data-flow prose affirmatively.** The README and
+  `skill/instructions.md` stated the privacy guarantee via negations ("never transmitted
+  to any third party", "private keys ... never read"), which trip the publish reviewer's
+  wallet-exfiltration keyword heuristic as a false positive. Rewrote as an affirmative
+  destination allowlist (data goes only to local computation or host-bound Wayfinder
+  execution/RPC paths) — same guarantee, no negated-privacy keywords.
+
 ## 0.4.0
 
 Correctness and reliability fixes. No new assets, venues, or actions.

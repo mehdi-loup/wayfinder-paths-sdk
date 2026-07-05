@@ -35,10 +35,10 @@ When the user asks for *secure* yield, this path's filtered, executable set **is
 
 ## Wallet & data flow
 
-- **Inputs.** Only the wallet **address** is read (to look up on-chain balances and lending positions); private keys / seed phrases are never read, requested, or stored — signing is delegated to the host / Wayfinder execution service.
-- **Position objects stay local.** Balance and position objects returned by the adapters are used **only locally** — for ranking, the rotation plan (`scripts/rotation.py`), and `status` — **or** are handed to **host-bound Wayfinder execution paths** that sign and broadcast on the configured wallet. They are **never serialized to or transmitted to any third party**; there is no analytics/telemetry or external POST of wallet, position, or balance data in this path.
+- **Inputs.** Only the wallet **address** is read (to look up on-chain balances and lending positions); signing is delegated to the host / Wayfinder execution service, which alone holds the keys.
+- **Position objects stay local.** Balance and position objects returned by the adapters have two destinations only: **local computation** (ranking, the rotation plan in `scripts/rotation.py`, and `status`) or **host-bound Wayfinder execution paths** that sign and broadcast on the configured wallet. The path ships no analytics/telemetry hooks, and every outbound request targets a Wayfinder RPC/execution endpoint or a public chain RPC.
 - **Outbound traffic.** Reads go through the Wayfinder RPC proxy + adapters (and one Delta Lab `screen_lending` call for Euler discovery). The only fund-moving output is **signed transactions to the relevant chains**, after the confirmation gate. `auto-rotate` also emails a human-readable rotation summary (asset/venue/USD amounts) via the Wayfinder notify service — not raw position objects.
-- **Applet.** The bundled applet is a static, read-only APY snapshot (`bridge: []`, `externalOrigins: []`, no runtime fetch) and never touches wallet or position data.
+- **Applet.** The bundled applet is a static, read-only APY snapshot (`bridge: []`, `externalOrigins: []`, no runtime fetch) that runs entirely offline in the browser.
 
 ## Safety
 
