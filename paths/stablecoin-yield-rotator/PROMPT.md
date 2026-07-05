@@ -71,7 +71,7 @@ slippage_bps: 30
 | `quote-rotation` | — | Computes proposed rotation deltas given current positions vs scan output. Shows expected net APY uplift, gas estimate, payback days. Read-only. |
 | `deposit` | `--amount`, `--asset` | Initial deposit into top-ranked venue. |
 | `update` | — | Execute rotation if quote passes constraints. Multi-step: withdraw old → bridge if cross-chain (BRAP) → deposit new. Halt on first revert. |
-| `status` | — | Aggregated positions across all venues + USD totals + blended APY + 30d realized yield. |
+| `status` | — | Aggregated positions across all venues + USD totals + blended APY. |
 | `withdraw` | `--amount?` | Liquidate to stablecoin in wallet (full or partial). |
 
 ## Skill triggers (`skill/instructions.md`)

@@ -1,7 +1,7 @@
 schema_version: '0.1'
 slug: stablecoin-yield-rotator
 name: Stablecoin Yield Rotator
-version: 0.4.0
+version: 0.4.1
 summary: Scan stablecoin lending APYs and rotate USDC, USDT, DAI, USDS, USDe, or GHO
   across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell
   on Ethereum, Polygon, Base, Arbitrum, and HyperEVM using TVL, utilization, cap-headroom,
