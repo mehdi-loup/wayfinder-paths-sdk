@@ -17,12 +17,14 @@ sys.path.insert(0, str(PATH_DIR / "scripts"))
 from legs import (  # noqa: E402
     HedgePosition,
     HedgeVenue,
+    HlSpotLeg,
     PairExecutor,
     SpotLeg,
     SpotPosition,
     close_pair_steps,
     hl_spot_coin,
     match_pt_markets,
+    open_failure_leaves_exposure,
     open_pair_steps,
     pt_market_root,
     select_spot_leg,
@@ -186,13 +188,13 @@ class FakeLeg(SpotLeg):
             return False, {"error": "spot venue down"}
         return True, {"units": usd_amount / 100.0}
 
-    async def close(self, symbol: str, units):
+    async def close(self, symbol: str, units, lot=None):
         self.calls.append("spot_close")
         if self.fail_close:
             return False, {"error": "spot close down"}
         return True, {"units": 1.0}
 
-    async def position(self, symbol: str) -> SpotPosition | None:
+    async def position(self, symbol: str, lot=None) -> SpotPosition | None:
         return None
 
 
@@ -248,3 +250,65 @@ def test_close_pair_reports_hedge_close_failure():
     assert not ok
     assert calls == ["spot_close", "hedge_close"]
     assert "hedge close failed" in report["error"]
+
+
+# ---------------------------------------------------------------------------
+# Half-open state machine: which open failures leave live exposure
+# ---------------------------------------------------------------------------
+
+def test_exposure_when_spot_fails_after_hedge():
+    executor, _ = _executor(fail_open=True)
+    ok, report = asyncio.run(
+        executor.open_pair("ETH", "fake_leg", 1_000.0, leverage=3, slippage=0.005)
+    )
+    assert not ok
+    assert open_failure_leaves_exposure(report)
+
+
+def test_no_exposure_when_hedge_fails_cleanly():
+    # Hedge never filled → nothing live → the pair record can be discarded.
+    report = {
+        "steps": [{"step": "hedge_short", "ok": False, "result": {"error": "margin"}}],
+        "error": "hedge open failed: margin",
+    }
+    assert not open_failure_leaves_exposure(report)
+
+
+def test_exposure_on_possible_partial_paired_fill():
+    report = {"steps": [], "error": "paired fill failed: timeout", "possible_partial_fill": True}
+    assert open_failure_leaves_exposure(report)
+
+
+# ---------------------------------------------------------------------------
+# Configured slippage reaches HL spot orders (not hard-coded)
+# ---------------------------------------------------------------------------
+
+class FakeHLAdapter:
+    def __init__(self) -> None:
+        self.orders: list[dict[str, Any]] = []
+
+    async def get_spot_asset_id(self, coin: str, quote: str) -> int:
+        return 10_042
+
+    async def get_all_mid_prices(self):
+        return True, {"UETH": 2_000.0, "ETH": 2_000.0}
+
+    def get_valid_order_size(self, asset_id: int, size: float) -> float:
+        return round(size, 4)
+
+    async def place_market_order(self, **kwargs):
+        self.orders.append(kwargs)
+        return True, {"status": "ok"}
+
+    async def get_spot_user_state(self, address: str):
+        return True, {"balances": [{"coin": "UETH", "total": 1.0, "hold": 0.0}]}
+
+
+def test_hl_spot_leg_uses_configured_slippage():
+    adapter = FakeHLAdapter()
+    leg = HlSpotLeg(adapter, "0xabc", None, slippage=0.0025)
+    ok, _res = asyncio.run(leg.open("ETH", 1_000.0))
+    assert ok
+    ok, _res = asyncio.run(leg.close("ETH", 0.5))
+    assert ok
+    assert [o["slippage"] for o in adapter.orders] == [0.0025, 0.0025]

@@ -4,7 +4,10 @@ wallet:
 # Optional dedicated wallet label; when set and present, all positions are
 # operated from it and `exit` transfers the settled USDC back to the main wallet.
 strategy_wallet:
-mode: live                                # "paper" | "live" — 48h paper run required before live pilot
+mode: paper                               # "paper" | "live" — ships in paper; flip to live deliberately
+# Live deposits refuse until this many hours of paper-mode updates are recorded
+# in state (override per-deposit with --skip-paper-gate). 0 disables the gate.
+paper_gate_hours: 48
 paused: false                             # kill switch: update() no-ops except delta + liquidation checks
 hedge:
   venue: hyperliquid                      # abstraction slot; CCXT venues land v1.1
