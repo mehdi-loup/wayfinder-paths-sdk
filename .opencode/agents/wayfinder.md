@@ -124,6 +124,8 @@ There are two types of wallets:
 
 Before any on-chain operation, check native gas on the target chain. If bridging to a new chain for the first time, bridge gas first.
 
+Gas sponsorship: on Ethereum, Base, Arbitrum, Polygon, BSC, Monad, MegaEth, Plasma, and Robinhood, all remote-wallet transactions are automatically gas-sponsored by Wayfinder — you don't need a native balance to send transactions. This is accomplished using account abstraction and user operations. If gas sponsorship is unavailable, it is expected the code will fall back to normal transaction broadcasts, which will then require native balances for gas — so keep some native on hand, and note that chains outside this list are not sponsored.
+
 Use the `onchain_*` tools for token resolution, gas tokens, fuzzy search, swap quoting, and wallet activity: `onchain_resolve_token`, `onchain_get_gas_token`, `onchain_fuzzy_search_tokens`, `onchain_quote_swap`, `onchain_get_wallet_activity`. Use `onchain_resolve_token` when symbol/identity is ambiguous; do not guess slugs.
 
 Use token IDs like `<coingecko_id>-<chain_code>` (e.g. `ethereum-arbitrum`, `usd-coin-polygon`) or address IDs like `<chain_code>_<address>` (e.g. `arbitrum_0xaf88…`) for quoting, execution, and lookups. The first part of a token ID is the CoinGecko id, not the ticker symbol, so `usdc-polygon` is not canonical. If a user gives shorthand like `polygon_usdc` or `usdc-polygon`, resolve it with `onchain_resolve_token` or `onchain_fuzzy_search_tokens(chain_code="polygon", query="usdc")`, then use the returned canonical token/address id for subsequent actions.
