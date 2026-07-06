@@ -170,8 +170,8 @@ def rotation_decision(
 ) -> RotationDecision:
     """Migrate only when threshold AND breakeven AND dwell all pass.
 
-    `bypass_dwell` implements `rotate --force` — it never bypasses the
-    threshold or breakeven math.
+    `bypass_dwell` backs `rotate --force`: it relaxes only the dwell
+    (minimum-hold) gate. The threshold and breakeven gates always apply.
     """
     apr_delta = candidate_net_apr - current_net_apr
     apr_delta_bps = int(round(apr_delta * 10_000))

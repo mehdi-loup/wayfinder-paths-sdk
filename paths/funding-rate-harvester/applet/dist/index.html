@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Funding Rate Harvester &mdash; Carry Scan</title>
+<style>
+  :root {
+    --bg:#0b0f14; --panel:#121821; --panel2:#0f141b; --line:#1f2937;
+    --text:#e6edf3; --muted:#8b98a8; --dim:#5b6675;
+    --green:#2ecc71; --green-line:#1f4030; --amber:#f0b429; --amber-line:#4a3a14;
+    --red:#ef4444; --accent:#16a34a; --chip:#1b2430; --barbg:#16202c;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:960px; margin:0 auto; padding:20px 18px 40px; }
+  header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; font-weight:650; letter-spacing:-0.01em; }
+  .sub { color:var(--muted); font-size:12px; margin-top:3px; }
+  .pill { font-size:11px; padding:2px 9px; border-radius:999px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .pill.snap { color:var(--green); border-color:var(--green-line); }
+  .band { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font-size:13px; color:var(--muted); margin:16px 0; }
+  .band b { color:var(--text); font-weight:600; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:16px 0 18px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .stat .n { font-size:22px; font-weight:680; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; }
+  .stat .n.pos { color:var(--green); }
+  .stat .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.04em; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:10px; }
+  th, td { text-align:right; padding:9px 11px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child, .l { text-align:left; }
+  thead th { color:var(--muted); font-weight:550; font-size:11px; text-transform:uppercase; letter-spacing:0.04em; background:var(--panel2); }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover { background:var(--panel2); }
+  .sym { font-weight:640; }
+  .leg { color:var(--muted); font-size:12px; }
+  .best { color:var(--green); font-size:10px; border:1px solid var(--green-line); border-radius:999px; padding:1px 6px; margin-left:6px; vertical-align:middle; }
+  .net { font-weight:660; }
+  .net.pos { color:var(--green); }
+  .net.neg { color:var(--red); }
+  .netcell { min-width:150px; }
+  .bar { height:6px; border-radius:3px; background:var(--barbg); margin-top:5px; overflow:hidden; }
+  .bar > span { display:block; height:100%; background:var(--accent); border-radius:3px; }
+  .add { color:var(--green); }
+  .sub-c { color:var(--dim); }
+  .chip { font-size:10px; padding:1px 7px; border-radius:999px; border:1px solid var(--line); }
+  .chip.mature { color:var(--green); border-color:var(--green-line); }
+  .chip.maturing { color:var(--amber); border-color:var(--amber-line); }
+  .foot { color:var(--dim); font-size:12px; margin-top:16px; line-height:1.6; }
+  .foot code { color:var(--muted); background:var(--chip); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app" data-path-ready="false">
+  <header>
+    <div>
+      <h1>Funding Rate Harvester &mdash; Carry Scan</h1>
+      <div class="sub">Delta-neutral funding harvest: short a Hyperliquid perp, hedge with a yield-bearing spot leg, keep the stacked carry.</div>
+    </div>
+    <span class="pill snap" id="snap">snapshot</span>
+  </header>
+
+  <div class="band">
+    <b>Triple carry stack.</b> Each candidate stacks <b>funding</b> (the short collects it),
+    <b>spot-leg yield</b> (the long hedge itself earns &mdash; Pendle PT, weETH, sUSDe, or zero-yield HL spot),
+    and an optional <b>Boros fixed-rate lock</b>, minus fees and slippage. Ranked by net APR after costs.
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th class="l">Asset</th>
+          <th class="l">Spot leg</th>
+          <th>Net APR</th>
+          <th>Funding</th>
+          <th>+ Spot yield</th>
+          <th>&minus; Fees</th>
+          <th>&minus; Slippage</th>
+          <th>Open interest</th>
+          <th>Funding EMA</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script type="application/json" id="scan-data">{"generatedAt":"2026-07-05T08:38:06Z","venue":"hyperliquid","note":"net_apr = funding EMA + spot-leg yield \u2212 fees \u2212 slippage (amortized); positive funding = shorts receive","ranked":[{"symbol":"BTC","spot_leg":"hl_spot","net_apr":0.06424,"funding_apr":0.11047,"spot_leg_apy":0.0,"fee_apr":0.0219,"slippage_apr":0.02433,"open_interest_usd":2199319490,"ema_mature":true},{"symbol":"ETH","spot_leg":"hl_spot","net_apr":0.06327,"funding_apr":0.1095,"spot_leg_apy":0.0,"fee_apr":0.0219,"slippage_apr":0.02433,"open_interest_usd":1373566774,"ema_mature":false},{"symbol":"ETH","spot_leg":"etherfi","net_apr":0.0361,"funding_apr":0.1095,"spot_leg_apy":0.02272,"fee_apr":0.07178,"slippage_apr":0.02433,"open_interest_usd":1373566774,"ema_mature":false},{"symbol":"ETH","spot_leg":"pendle_pt","net_apr":0.0241,"funding_apr":0.1095,"spot_leg_apy":0.02289,"fee_apr":0.08395,"slippage_apr":0.02433,"open_interest_usd":1373566774,"ema_mature":false}],"best_by_symbol":{"BTC":{"spot_leg":"hl_spot","net_apr":0.06424},"ETH":{"spot_leg":"hl_spot","net_apr":0.06327}}}</script>
+<script>
+(function () {
+  var app = document.getElementById("app");
+  try {
+    var data = JSON.parse(document.getElementById("scan-data").textContent);
+    var pct = function (x) { return (x * 100).toFixed(2) + "%"; };
+    var usd = function (x) {
+      if (x >= 1e9) return "$" + (x / 1e9).toFixed(2) + "B";
+      if (x >= 1e6) return "$" + (x / 1e6).toFixed(0) + "M";
+      return "$" + Math.round(x).toLocaleString();
+    };
+    var ranked = data.ranked || [];
+    var best = data.best_by_symbol || {};
+
+    // Snapshot pill
+    document.getElementById("snap").textContent = "snapshot \u00b7 " + data.generatedAt;
+
+    // Stat tiles
+    var top = ranked.length ? ranked[0] : null;
+    var maxNet = ranked.reduce(function (m, r) { return Math.max(m, r.net_apr); }, 0) || 1;
+    var stats = [
+      top ? { n: pct(top.net_apr), pos: true, l: "Top net carry (" + top.symbol + " / " + top.spot_leg + ")" } : null,
+      { n: String(Object.keys(best).length), l: "Assets ranked" },
+      { n: String(ranked.length), l: "Asset \u00d7 spot-leg combos" }
+    ].filter(Boolean);
+    document.getElementById("stats").innerHTML = stats.map(function (s) {
+      return '<div class="stat"><div class="n' + (s.pos ? " pos" : "") + '">' + s.n +
+        '</div><div class="l">' + s.l + "</div></div>";
+    }).join("");
+
+    // Rows
+    document.getElementById("rows").innerHTML = ranked.map(function (r) {
+      var isBest = best[r.symbol] && best[r.symbol].spot_leg === r.spot_leg;
+      var netCls = r.net_apr >= 0 ? "pos" : "neg";
+      var barW = Math.max(0, Math.min(100, (r.net_apr / maxNet) * 100));
+      var chip = r.ema_mature
+        ? '<span class="chip mature">mature</span>'
+        : '<span class="chip maturing">maturing</span>';
+      return "<tr>" +
+        '<td class="l sym">' + r.symbol + (isBest ? '<span class="best">best</span>' : "") + "</td>" +
+        '<td class="l leg">' + r.spot_leg + "</td>" +
+        '<td class="netcell"><span class="net ' + netCls + '">' + pct(r.net_apr) +
+          '</span><div class="bar"><span style="width:' + barW + '%"></span></div></td>' +
+        "<td>" + pct(r.funding_apr) + "</td>" +
+        (r.spot_leg_apy > 0
+          ? '<td class="add">+' + pct(r.spot_leg_apy) + "</td>"
+          : '<td class="sub-c">&mdash;</td>') +
+        '<td class="sub-c">' + pct(r.fee_apr) + "</td>" +
+        '<td class="sub-c">' + pct(r.slippage_apr) + "</td>" +
+        "<td>" + usd(r.open_interest_usd) + "</td>" +
+        "<td>" + chip + "</td>" +
+        "</tr>";
+    }).join("");
+
+    // Footer
+    document.getElementById("foot").innerHTML =
+      data.note.replace("&", "&amp;") + "<br>" +
+      "Static read-only snapshot on the <b>" + data.venue + "</b> perp venue &mdash; no wallet, balance, or position data. " +
+      "Immature EMAs (fresh history) are shown but cannot be deposited into until the window fills. " +
+      "Recompute live in the path with <code>--action discover</code>.";
+
+    app.setAttribute("data-path-ready", "true");
+  } catch (e) {
+    app.innerHTML = '<div class="band">Snapshot unavailable.</div>';
+    app.setAttribute("data-path-ready", "true");
+  }
+})();
+</script>
+</body>
+</html>

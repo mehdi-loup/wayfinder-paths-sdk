@@ -125,6 +125,17 @@ def close_pair_steps(hedge_venue: str, spot_leg: str) -> list[str]:
     return ["spot_close", "hedge_close"]
 
 
+def open_failure_leaves_exposure(report: dict[str, Any]) -> bool:
+    """Whether a failed open_pair may have left live exposure on either leg.
+
+    Drives the half-open state machine: exposure → keep the pair recorded
+    (flagged half_open) so `unwind` can recover it; no exposure → discard.
+    """
+    if "unhedged_short" in report or report.get("possible_partial_fill"):
+        return True
+    return any(step.get("ok") for step in report.get("steps", []))
+
+
 # ---------------------------------------------------------------------------
 # Hedge venue abstraction (v1.0: Hyperliquid; v1.1 adds CCXT venues)
 # ---------------------------------------------------------------------------
@@ -387,11 +398,22 @@ class SpotLeg(ABC):
 
     @abstractmethod
     async def close(
-        self, symbol: str, units: float | None
-    ) -> tuple[bool, dict[str, Any]]: ...
+        self, symbol: str, units: float | None, lot: dict[str, Any] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
+        """Close up to `units` of the position.
+
+        `lot` carries the pair's recorded fill (units, and for PT legs the
+        exact pt_address/chain) so closes stay lot-isolated — a session wallet
+        holding unrelated UETH/weETH/sUSDe/PT must never have those sold.
+        """
 
     @abstractmethod
-    async def position(self, symbol: str) -> SpotPosition | None: ...
+    async def position(
+        self, symbol: str, lot: dict[str, Any] | None = None
+    ) -> SpotPosition | None:
+        """Current position; `lot` pins the exact holding (e.g. PT address)
+        so valuation in a shared wallet binds to the pair's fill, not the
+        first symbol-root match."""
 
 
 class HlSpotLeg(SpotLeg):
@@ -405,10 +427,13 @@ class HlSpotLeg(SpotLeg):
         adapter: Any,
         address: str,
         builder_fee: dict[str, Any] | None = None,
+        *,
+        slippage: float = 0.005,
     ) -> None:
         self.adapter = adapter
         self.address = address
         self.builder_fee = builder_fee
+        self.slippage = slippage
 
     async def _spot_asset_id(self, symbol: str) -> int | None:
         coin = hl_spot_coin(symbol)
@@ -447,7 +472,7 @@ class HlSpotLeg(SpotLeg):
         ok, res = await self.adapter.place_market_order(
             asset_id=spot_id,
             is_buy=True,
-            slippage=0.05,
+            slippage=self.slippage,
             size=float(size),
             address=self.address,
             builder=self.builder_fee,
@@ -456,7 +481,9 @@ class HlSpotLeg(SpotLeg):
             return False, {"error": str(res)}
         return True, {"units": float(size), "price": price, "result": res}
 
-    async def close(self, symbol: str, units: float | None) -> tuple[bool, dict[str, Any]]:
+    async def close(
+        self, symbol: str, units: float | None, lot: dict[str, Any] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
         spot_id = await self._spot_asset_id(symbol)
         if spot_id is None:
             return False, {"error": f"no HL spot pair for {symbol}"}
@@ -470,7 +497,7 @@ class HlSpotLeg(SpotLeg):
         ok, res = await self.adapter.place_market_order(
             asset_id=spot_id,
             is_buy=False,
-            slippage=0.05,
+            slippage=self.slippage,
             size=float(size),
             address=self.address,
             builder=self.builder_fee,
@@ -479,7 +506,9 @@ class HlSpotLeg(SpotLeg):
             return False, {"error": str(res)}
         return True, {"units": float(size), "result": res}
 
-    async def position(self, symbol: str) -> SpotPosition | None:
+    async def position(
+        self, symbol: str, lot: dict[str, Any] | None = None
+    ) -> SpotPosition | None:
         coin = hl_spot_coin(symbol)
         ok, state = await self.adapter.get_spot_user_state(self.address)
         if not ok or not isinstance(state, dict):
@@ -582,19 +611,38 @@ class PendlePtLeg(SpotLeg):
                     found.append((chain_id, pos))
         return found
 
-    async def _position_for(self, symbol: str) -> tuple[int, dict[str, Any]] | None:
+    async def _position_for(
+        self, symbol: str, pt_address: str | None = None
+    ) -> tuple[int, dict[str, Any]] | None:
         for chain_id, pos in await self._positions_raw():
+            if pt_address is not None:
+                if str(pos.get("pt") or "").lower() == pt_address.lower():
+                    return chain_id, pos
+                continue
             if pt_market_root(str(pos.get("marketName") or "")) == symbol.upper():
                 return chain_id, pos
         return None
 
-    async def close(self, symbol: str, units: float | None) -> tuple[bool, dict[str, Any]]:
-        located = await self._position_for(symbol)
+    async def close(
+        self, symbol: str, units: float | None, lot: dict[str, Any] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
+        # Lot isolation: when the pair recorded its exact PT, close that one —
+        # never "whichever PT matches the symbol root" in a shared wallet.
+        located = await self._position_for(symbol, pt_address=(lot or {}).get("pt_address"))
         if located is None:
             return True, {"units": 0.0, "note": "no PT position"}
         chain_id, pos = located
         pt_address = str(pos.get("pt") or "")
-        raw_balance = int((pos.get("balances", {}).get("pt", {}) or {}).get("raw", 0) or 0)
+        pt_bal = pos.get("balances", {}).get("pt", {}) or {}
+        raw_balance = int(pt_bal.get("raw", 0) or 0)
+        total_units = float(pt_bal.get("formatted") or raw_balance / 1e18)
+        if units is not None and total_units > 0:
+            raw_to_close = min(int(raw_balance * (units / total_units)), raw_balance)
+        else:
+            raw_to_close = raw_balance
+        if raw_to_close <= 0:
+            return True, {"units": 0.0, "note": "close size rounds to 0"}
+        closed_units = total_units * (raw_to_close / raw_balance) if raw_balance else 0.0
         market = await self.find_market(symbol)
         if market is None or str(market.get("ptAddress", "")).lower() != pt_address.lower():
             # Market expired (or rolled off active list): redeem PT → underlying.
@@ -604,26 +652,30 @@ class PendlePtLeg(SpotLeg):
             ok, res = await self.adapter.execute_convert(
                 chain=chain_id,
                 slippage=self.slippage,
-                inputs=[{"token": pt_address, "amount": str(raw_balance)}],
+                inputs=[{"token": pt_address, "amount": str(raw_to_close)}],
                 outputs=[underlying],
             )
             if not ok:
                 return False, dict(res) if isinstance(res, dict) else {"error": str(res)}
-            return True, {"mode": "redeem", "underlying": underlying, "result": res}
+            return True, {
+                "mode": "redeem", "units": closed_units, "underlying": underlying, "result": res,
+            }
         ok, res = await self.adapter.execute_swap(
             chain=chain_id,
             market_address=market["marketAddress"],
             token_in=pt_address,
             token_out=USDC_BY_CHAIN[chain_id],
-            amount_in=str(raw_balance),
+            amount_in=str(raw_to_close),
             slippage=self.slippage,
         )
         if not ok:
             return False, dict(res) if isinstance(res, dict) else {"error": str(res)}
-        return True, {"mode": "swap", "result": res}
+        return True, {"mode": "swap", "units": closed_units, "result": res}
 
-    async def position(self, symbol: str) -> SpotPosition | None:
-        located = await self._position_for(symbol)
+    async def position(
+        self, symbol: str, lot: dict[str, Any] | None = None
+    ) -> SpotPosition | None:
+        located = await self._position_for(symbol, pt_address=(lot or {}).get("pt_address"))
         if located is None:
             return None
         chain_id, pos = located
@@ -681,7 +733,9 @@ class BrapTokenLeg(SpotLeg):
             return False, {"error": str(res)}
         return True, {"result": res}
 
-    async def close(self, symbol: str, units: float | None) -> tuple[bool, dict[str, Any]]:
+    async def close(
+        self, symbol: str, units: float | None, lot: dict[str, Any] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
         balance = await self._balance_lookup()
         target = balance if units is None else min(units, balance)
         if target <= 0:
@@ -698,7 +752,9 @@ class BrapTokenLeg(SpotLeg):
             return False, {"error": str(res)}
         return True, {"units": target, "result": res}
 
-    async def position(self, symbol: str) -> SpotPosition | None:
+    async def position(
+        self, symbol: str, lot: dict[str, Any] | None = None
+    ) -> SpotPosition | None:
         units = await self._balance_lookup()
         if units <= 0:
             return None
@@ -922,7 +978,9 @@ class PaperSpotLeg(SpotLeg):
         self.state["usdc"] -= usd_amount
         return True, {"units": units, "price": fill_px, "paper": True}
 
-    async def close(self, symbol: str, units: float | None) -> tuple[bool, dict[str, Any]]:
+    async def close(
+        self, symbol: str, units: float | None, lot: dict[str, Any] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
         pos = self.state["spot"].get(self._key(symbol))
         if not pos or pos["units"] <= 0:
             return True, {"units": 0.0, "note": "paper: no spot balance"}
@@ -940,7 +998,9 @@ class PaperSpotLeg(SpotLeg):
             self.state["spot"].pop(self._key(symbol), None)
         return True, {"units": size, "usd_out": usd_out, "paper": True}
 
-    async def position(self, symbol: str) -> SpotPosition | None:
+    async def position(
+        self, symbol: str, lot: dict[str, Any] | None = None
+    ) -> SpotPosition | None:
         pos = self.state["spot"].get(self._key(symbol))
         if not pos or pos["units"] <= 0:
             return None
@@ -986,7 +1046,7 @@ class PairExecutor:
         # Paper mode wraps the live venue, so atomic fills only apply when the
         # hedge really is the live HL venue; paper falls through to sequential.
         if steps == ["paired_atomic"] and isinstance(self.hedge, HyperliquidHedge):
-            return await self._open_paired_atomic(symbol, notional_usd, report)
+            return await self._open_paired_atomic(symbol, notional_usd, report, slippage)
 
         ok_h, hedge_res = await self.hedge.open_short(symbol, notional_usd, slippage)
         report["steps"].append({"step": "hedge_short", "ok": ok_h, "result": hedge_res})
@@ -1000,18 +1060,19 @@ class PairExecutor:
         report["steps"].append({"step": "spot_open", "ok": ok_s, "result": spot_res})
         if not ok_s:
             # Never leave a silent unhedged short: halt loudly with state +
-            # explicit next actions for the operator.
+            # explicit next actions for the operator. The caller persists the
+            # pair as half-open so `unwind --symbol` can recover it.
             report["error"] = f"spot leg failed after hedge opened: {spot_res.get('error')}"
             report["unhedged_short"] = hedge_res
             report["remediation"] = [
-                f"close hedge: --action unwind --symbol {symbol}",
-                f"or retry spot leg: --action deposit --symbol {symbol} (spot only)",
+                f"close the hedge: --action unwind --symbol {symbol} --confirm",
+                "then re-open the pair with a fresh deposit if still attractive",
             ]
             return False, report
         return True, report
 
     async def _open_paired_atomic(
-        self, symbol: str, notional_usd: float, report: dict[str, Any]
+        self, symbol: str, notional_usd: float, report: dict[str, Any], slippage: float
     ) -> tuple[bool, dict[str, Any]]:
         hedge = self.hedge
         assert isinstance(hedge, HyperliquidHedge)
@@ -1025,7 +1086,7 @@ class PairExecutor:
         filler = PairedFiller(
             adapter=hedge.adapter,
             address=hedge.address,
-            cfg=FillConfig(max_slip_bps=100),
+            cfg=FillConfig(max_slip_bps=max(int(slippage * 10_000), 10)),
         )
         try:
             filled_spot, filled_perp, spot_notional, perp_notional, *_pointers = (
@@ -1039,7 +1100,12 @@ class PairExecutor:
                 )
             )
         except Exception as exc:
-            return False, {**report, "error": f"paired fill failed: {exc}"}
+            # PairedFiller may have partially filled either leg before raising.
+            return False, {
+                **report,
+                "error": f"paired fill failed: {exc}",
+                "possible_partial_fill": True,
+            }
         report["steps"].append(
             {
                 "step": "paired_atomic",
@@ -1055,12 +1121,18 @@ class PairExecutor:
         return True, report
 
     async def close_pair(
-        self, symbol: str, spot_leg_name: str, *, slippage: float
+        self,
+        symbol: str,
+        spot_leg_name: str,
+        *,
+        slippage: float,
+        units: float | None = None,
+        lot: dict[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         leg = self._leg(spot_leg_name)
         report: dict[str, Any] = {"symbol": symbol, "spot_leg": spot_leg_name, "steps": []}
 
-        ok_s, spot_res = await leg.close(symbol, None)
+        ok_s, spot_res = await leg.close(symbol, units, lot)
         report["steps"].append({"step": "spot_close", "ok": ok_s, "result": spot_res})
         if not ok_s:
             report["error"] = f"spot close failed: {spot_res.get('error')} — hedge left open intentionally"

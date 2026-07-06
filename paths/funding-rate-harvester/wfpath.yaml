@@ -1,7 +1,7 @@
 schema_version: '0.1'
 slug: funding-rate-harvester
 name: Funding Rate Harvester
-version: 0.1.0
+version: 0.2.0
 summary: "Delta-neutral funding harvester with a triple carry stack. Ranks Hyperliquid\
   \ perp markets by net stacked carry (funding EMA + spot-leg yield \u2212 fees \u2212\
   \ slippage), opens hedge-first pairs where the long hedge itself earns yield (Pendle\
@@ -22,6 +22,9 @@ components:
 - id: main
   kind: script
   path: scripts/main.py
+applet:
+  build_dir: applet/dist
+  manifest: applet/applet.manifest.json
 skill:
   enabled: true
   source: generated
