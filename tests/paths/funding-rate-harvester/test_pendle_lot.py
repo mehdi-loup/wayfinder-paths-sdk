@@ -14,6 +14,7 @@ from typing import Any
 PATH_DIR = Path(__file__).resolve().parents[3] / "paths/funding-rate-harvester"
 sys.path.insert(0, str(PATH_DIR / "scripts"))
 
+import main as harvester  # noqa: E402
 from legs import PendlePtLeg  # noqa: E402
 
 PT_A = "0x" + "a" * 40  # the pair's recorded lot
@@ -113,6 +114,35 @@ def test_full_close_without_units_swaps_lot_balance():
     )
     assert ok
     assert adapter.swaps[0]["amount_in"] == str(2 * RAW)
+
+
+def _gas_ctx(adapter: FakePendleAdapter) -> Any:
+    ctx = harvester.Ctx()
+    ctx.config = {}
+    ctx.legs = {"pendle_pt": PendlePtLeg(adapter, "0xwallet", chains=[42161])}
+    return ctx
+
+
+def test_leg_gas_prices_l2_pendle_below_mainnet():
+    # The faked PT market is on Arbitrum (42161) → cents, not the mainnet $5.
+    ctx = _gas_ctx(FakePendleAdapter())
+    l2 = asyncio.run(harvester._leg_gas_usd(ctx, "pendle_pt", "ETH"))
+    mainnet = asyncio.run(harvester._leg_gas_usd(ctx, "ethena", "ETH"))
+    assert l2 == harvester.EVM_LEG_GAS_USD_BY_CHAIN[42161]
+    assert l2 < mainnet == harvester.EVM_LEG_GAS_USD_BY_CHAIN[1]
+    assert asyncio.run(harvester._leg_gas_usd(ctx, "hl_spot", "ETH")) == 0.0
+
+
+def test_migration_cost_charges_per_chain_gas():
+    # notional 0 isolates the gas term: L2 pendle + mainnet ethena.
+    ctx = _gas_ctx(FakePendleAdapter())
+    cost = asyncio.run(
+        harvester._migration_cost_usd(ctx, 0.0, "pendle_pt", "ETH", "ethena", "ETH")
+    )
+    assert cost == (
+        harvester.EVM_LEG_GAS_USD_BY_CHAIN[42161]
+        + harvester.EVM_LEG_GAS_USD_BY_CHAIN[1]
+    )
 
 
 def test_position_binds_to_lot_pt_not_first_symbol_root():

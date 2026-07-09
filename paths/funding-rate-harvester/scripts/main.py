@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -120,6 +121,14 @@ from wayfinder_paths.runner.monitor_state import (  # noqa: E402
 PATH_SLUG = "funding-rate-harvester"
 STATE_NAME = "funding_rate_harvester"
 
+# Pin durable state to one namespace so the interactive CLI and any runner job
+# share a single position book. A runner job defaults WAYFINDER_KV_NAMESPACE to
+# the job name (in its own isolated subprocess), so without this an interactively
+# opened paper/live pair would be invisible to the scheduled `update`, and vice
+# versa. Overriding is safe: jobs run in separate processes, so this can't leak
+# into another job's namespace.
+os.environ["WAYFINDER_KV_NAMESPACE"] = STATE_NAME
+
 WEETH_MAINNET = "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee"
 SUSDE_MAINNET = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497"
 USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
@@ -131,8 +140,11 @@ DEFAULT_HEDGE_TAKER_FEE_BPS = 4.5  # HL base-tier taker
 DEFAULT_SPOT_COST_BPS = {"hl_spot": 4.5, "pendle_pt": 30.0, "etherfi": 25.0, "ethena": 25.0}
 DEFAULT_SLIPPAGE_COST_BPS_PER_FILL = 5.0
 DEFAULT_COST_AMORTIZATION_DAYS = 30.0
-# Flat per-migration gas allowance when an EVM spot leg is involved.
-EVM_LEG_GAS_USD = 5.0
+# Per-migration gas allowance by chain (USD): a mainnet swap costs dollars, an
+# L2 swap costs cents. etherfi/ethena are mainnet legs; a Pendle PT leg uses its
+# market's chain. Unknown chain → assume mainnet (never under-charge breakeven).
+EVM_LEG_GAS_USD_BY_CHAIN = {1: 5.0, 8453: 0.10, 42161: 0.20}
+DEFAULT_EVM_LEG_GAS_USD = 5.0
 MIN_GAS_WEI = 3 * 10**14  # ~0.0003 native
 
 EXECUTED_KEY_TTL_S = 7 * 86400
@@ -148,6 +160,49 @@ def load_yaml(name: str) -> dict[str, Any]:
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+def _round(value: Any) -> Any:
+    return round(value, 4) if isinstance(value, (int, float)) else value
+
+
+def _compact_combo(d: dict[str, Any]) -> dict[str, Any]:
+    """One flat row per combo — drops the nested `meta`/interval detail."""
+    meta = d.get("meta") or {}
+    return {
+        "symbol": d.get("symbol"),
+        "spot_leg": d.get("spot_leg"),
+        "net_apr": _round(d.get("net_apr")),
+        "funding_apr": _round(d.get("funding_apr")),
+        "spot_leg_apy": _round(d.get("spot_leg_apy")),
+        "cost_apr": _round(
+            (d.get("fee_apr") or 0.0)
+            + (d.get("slippage_apr") or 0.0)
+            + (d.get("financing_apr") or 0.0)
+        ),
+        "ema_mature": meta.get("ema_mature"),
+    }
+
+
+def compactify(payload: dict[str, Any]) -> dict[str, Any]:
+    """Trim verbose nested combo/history structures for human review."""
+    action = payload.get("action")
+    if action == "discover":
+        payload["ranked"] = [_compact_combo(c) for c in payload.get("ranked", [])]
+        payload.pop("best_spot_leg_by_symbol", None)
+    elif action == "quote":
+        payload["quotes"] = [
+            {
+                **_compact_combo(q),
+                "size_usd": q.get("size_usd"),
+                "daily_net_carry_usd": q.get("daily_net_carry_usd"),
+                "breakeven_days": q.get("breakeven_days"),
+            }
+            for q in payload.get("quotes", [])
+        ]
+    elif action == "status":
+        payload.pop("recent_history", None)
+    return payload
 
 
 def _now() -> float:
@@ -433,14 +488,21 @@ async def _seed_funding_ema(ctx: Ctx, symbol: str, ema_hours: float) -> float | 
         return None
 
 
-async def collect_market_rows(ctx: Ctx) -> dict[str, dict[str, Any]]:
-    """Per-symbol funding/EMA/oi rows for the whitelist (+ dynamic discovery)."""
+async def collect_market_rows(
+    ctx: Ctx, excluded: list[dict[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Per-symbol funding/EMA/oi rows for the whitelist (+ dynamic discovery).
+
+    When `excluded` is provided, symbols dropped by the OI/funding filters are
+    appended as `{symbol, reason}` so callers (discover) can explain the drops.
+    """
     scoring_cfg = ctx.config.get("scoring") or {}
     filters = ctx.universe.get("filters") or {}
     ema_hours = float(scoring_cfg.get("funding_ema_hours", 72))
 
     snapshot = await ctx.hedge.perp_snapshot()
-    symbols = {str(s).upper() for s in (ctx.universe.get("symbols") or [])}
+    whitelist = {str(s).upper() for s in (ctx.universe.get("symbols") or [])}
+    symbols = set(whitelist)
 
     delta_lab_funding: dict[str, Any] = {}
     if bool(ctx.universe.get("allow_dynamic_discovery")):
@@ -461,7 +523,9 @@ async def collect_market_rows(ctx: Ctx) -> dict[str, dict[str, Any]]:
     now = _now()
     rows: dict[str, dict[str, Any]] = {}
     seeds_this_run = 0
-    for sym in sorted(symbols):
+    # Whitelist symbols seed before dynamically-discovered ones so a flood of
+    # discovered alts can't starve core markets of the per-run seed budget.
+    for sym in sorted(symbols, key=lambda s: (s not in whitelist, s)):
         snap = snapshot.get(sym)
         if snap is None:
             continue
@@ -471,9 +535,13 @@ async def collect_market_rows(ctx: Ctx) -> dict[str, dict[str, Any]]:
         ema_key = f"{ctx.hedge.name}:{sym}"
         ema_state = ctx.state["funding_ema"].get(ema_key) or {}
         seeded_from_history = bool(ema_state.get("seeded_from_history"))
-        if not ema_state and seeds_this_run < MAX_EMA_SEEDS_PER_RUN:
-            # First sight of a symbol: seed the EMA from realized funding
-            # history so a one-interval spike can't masquerade as a 72h EMA.
+        if not seeded_from_history and seeds_this_run < MAX_EMA_SEEDS_PER_RUN:
+            # Seed (or re-seed) the EMA from realized funding history until it
+            # takes — not only on first sight — so a one-interval spike can't
+            # masquerade as a 72h EMA. A symbol whose first-sight seed was
+            # skipped (per-run budget) or failed (transient API) would otherwise
+            # stay spot-seeded and immature for a full EMA window instead of
+            # maturing as soon as history is available.
             seeds_this_run += 1
             seed = await _seed_funding_ema(ctx, sym, ema_hours)
             if seed is not None:
@@ -510,21 +578,41 @@ async def collect_market_rows(ctx: Ctx) -> dict[str, dict[str, Any]]:
     min_oi = float(filters.get("min_oi_usd", 0))
     min_funding_bps = float(filters.get("min_funding_apr_bps", 0))
     open_symbols = set(ctx.state["pairs"])
-    return {
-        sym: row
-        for sym, row in rows.items()
-        if sym in open_symbols
-        or (
-            row["open_interest_usd"] >= min_oi
-            and row["funding_ema_apr"] * 10_000 >= min_funding_bps
-        )
-    }
+    kept: dict[str, dict[str, Any]] = {}
+    for sym, row in rows.items():
+        if sym in open_symbols:
+            kept[sym] = row
+            continue
+        if row["open_interest_usd"] < min_oi:
+            if excluded is not None:
+                excluded.append({
+                    "symbol": sym,
+                    "reason": f"open_interest ${row['open_interest_usd']:,.0f} "
+                    f"< min_oi_usd ${min_oi:,.0f}",
+                })
+            continue
+        funding_bps = row["funding_ema_apr"] * 10_000
+        if funding_bps < min_funding_bps:
+            if excluded is not None:
+                excluded.append({
+                    "symbol": sym,
+                    "reason": f"funding EMA {funding_bps:.0f}bps "
+                    f"< min_funding_apr_bps {min_funding_bps:.0f}bps",
+                })
+            continue
+        kept[sym] = row
+    return kept
 
 
 async def apply_volatility_filter(
-    ctx: Ctx, rows: dict[str, dict[str, Any]]
+    ctx: Ctx,
+    rows: dict[str, dict[str, Any]],
+    excluded: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Drop symbols above the realized-vol cap (30d daily). Discover-only."""
+    """Drop symbols above the realized-vol cap (30d daily). Discover-only.
+
+    Records `{symbol, reason}` into `excluded` for symbols dropped over the cap.
+    """
     filters = ctx.universe.get("filters") or {}
     max_vol_pct = filters.get("max_lookback_volatility_pct")
     if max_vol_pct is None:
@@ -546,6 +634,12 @@ async def apply_volatility_filter(
             row["realized_vol_pct_30d"] = round(vol_pct, 2)
             if vol_pct <= float(max_vol_pct) or sym in ctx.state["pairs"]:
                 kept[sym] = row
+            elif excluded is not None:
+                excluded.append({
+                    "symbol": sym,
+                    "reason": f"realized_vol {vol_pct:.0f}% "
+                    f"> max_lookback_volatility_pct {float(max_vol_pct):.0f}%",
+                })
         except Exception as exc:
             logger.warning(f"vol filter unavailable for {sym}: {exc}")
             kept[sym] = row
@@ -629,11 +723,20 @@ def _combo_for(combos: list[ComboScore], symbol: str, leg: str) -> ComboScore | 
     return None
 
 
-def _migration_cost_usd(ctx: Ctx, notional_usd: float, from_leg: str, to_leg: str) -> float:
+async def _migration_cost_usd(
+    ctx: Ctx,
+    notional_usd: float,
+    from_leg: str,
+    from_symbol: str,
+    to_leg: str,
+    to_symbol: str,
+) -> float:
     taker, spot_costs, _amort, slippage_cost_bps = _cost_config(ctx)
     close_bps = taker + spot_costs.get(from_leg, 25.0) + 2 * slippage_cost_bps
     open_bps = taker + spot_costs.get(to_leg, 25.0) + 2 * slippage_cost_bps
-    gas = sum(EVM_LEG_GAS_USD for leg in (from_leg, to_leg) if leg != "hl_spot")
+    gas = await _leg_gas_usd(ctx, from_leg, from_symbol) + await _leg_gas_usd(
+        ctx, to_leg, to_symbol
+    )
     return notional_usd * (close_bps + open_bps) / 10_000 + gas
 
 
@@ -703,6 +806,15 @@ async def _leg_usdc_requirement(
 async def _leg_chain_ids(ctx: Ctx, leg_name: str, symbol: str) -> list[int]:
     requirement = await _leg_usdc_requirement(ctx, leg_name, symbol)
     return [requirement[0]] if requirement else []
+
+
+async def _leg_gas_usd(ctx: Ctx, leg_name: str, symbol: str) -> float:
+    """Per-migration gas for one spot leg, priced by the chain it executes on."""
+    if leg_name == "hl_spot":
+        return 0.0
+    requirement = await _leg_usdc_requirement(ctx, leg_name, symbol)
+    chain_id = requirement[0] if requirement else 1
+    return EVM_LEG_GAS_USD_BY_CHAIN.get(chain_id, DEFAULT_EVM_LEG_GAS_USD)
 
 
 async def _intended_lot(ctx: Ctx, leg_name: str, symbol: str) -> dict[str, Any]:
@@ -851,9 +963,10 @@ async def _lock_pnl(ctx: Ctx, pair: dict[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 async def action_discover(ctx: Ctx, top_n: int) -> dict[str, Any]:
-    rows = await collect_market_rows(ctx)
-    rows = await apply_volatility_filter(ctx, rows)
-    combos, exclusions = await build_combos(ctx, rows)
+    excluded: list[dict[str, Any]] = []
+    rows = await collect_market_rows(ctx, excluded=excluded)
+    rows = await apply_volatility_filter(ctx, rows, excluded=excluded)
+    combos, leg_exclusions = await build_combos(ctx, rows)
     save_state(ctx.state)  # persist EMA updates
     best_by_symbol: dict[str, dict[str, Any]] = {}
     for combo in combos:
@@ -863,7 +976,7 @@ async def action_discover(ctx: Ctx, top_n: int) -> dict[str, Any]:
         "mode": "paper" if ctx.paper else "live",
         "ranked": [c.to_dict() for c in combos[:top_n]],
         "best_spot_leg_by_symbol": best_by_symbol,
-        "excluded": exclusions,
+        "excluded": excluded + leg_exclusions,
         "note": (
             "net_apr = funding EMA + spot-leg yield − fees − slippage (amortized); "
             "positive funding = shorts receive"
@@ -884,7 +997,12 @@ async def _quote_payload(ctx: Ctx, symbol: str, size_usd: float) -> dict[str, An
         raise SystemExit(f"no spot leg available for {sym}: {exclusions}")
     quotes = []
     for combo in combos:
-        entry_exit_cost = _migration_cost_usd(ctx, size_usd, combo.spot_leg, combo.spot_leg) / 2
+        entry_exit_cost = (
+            await _migration_cost_usd(
+                ctx, size_usd, combo.spot_leg, combo.symbol, combo.spot_leg, combo.symbol
+            )
+            / 2
+        )
         round_trip_cost = entry_exit_cost * 2
         daily_carry = size_usd * combo.net_apr / 365.0
         quotes.append(
@@ -1497,7 +1615,9 @@ async def _evaluate_rotation(
         best = candidates[0]
         snap = await ctx.hedge.short_position(sym)
         notional = snap.notional_usd if snap else float(pair.get("entry_notional_usd") or 0.0)
-        cost = _migration_cost_usd(ctx, notional, pair["spot_leg"], best.spot_leg)
+        cost = await _migration_cost_usd(
+            ctx, notional, pair["spot_leg"], sym, best.spot_leg, best.symbol
+        )
         hours_held = (_now() - float(pair.get("opened_ts") or _now())) / 3600.0
         decision = rotation_decision(
             current.net_apr,
@@ -1717,6 +1837,11 @@ async def action_update(ctx: Ctx, *, confirm: bool, resume: bool) -> dict[str, A
         if not (confirm and has_open_pair):
             report["paper_hours_note"] = (
                 "not accruing: gate hours require --confirm cycles with an open paper pair"
+            )
+            reason = "pass --confirm" if not confirm else "no open paper pair"
+            report.setdefault("warnings", []).append(
+                f"PAPER_HOURS_NOT_ACCRUING: {reason} — this cycle does not count "
+                "toward the live-deposit gate"
             )
 
     # 1. Collect (also refreshes EMA state). Failure → stale path below.
@@ -2232,11 +2357,25 @@ def _parser() -> argparse.ArgumentParser:
         ],
     )
     parser.add_argument("--symbol", help="asset symbol, e.g. ETH")
-    parser.add_argument("--size", type=float, default=1000.0, help="quote size in USD")
-    parser.add_argument("--amount", type=float, help="deposit notional in USD")
+    # One USD-notional flag for both quote and deposit. --size is a deprecated
+    # alias so a value passed under either name can't be silently masked by the
+    # other's default; quote falls back to 1000 only when neither is given.
+    parser.add_argument(
+        "--amount",
+        "--size",
+        dest="amount",
+        type=float,
+        default=None,
+        help="USD notional (quote defaults to 1000 if omitted; deposit requires it)",
+    )
     parser.add_argument("--gas", type=float, default=0.0, help="USD of USDC to convert to gas")
     parser.add_argument("--leg", help="override spot leg selection for deposit")
     parser.add_argument("--top", type=int, default=10, help="rows for discover")
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="trim verbose nested combo/history structures for human review",
+    )
     parser.add_argument("--tenor", type=float, help="target Boros tenor in days for lock")
     parser.add_argument("--force", action="store_true", help="rotate: relax the dwell gate (breakeven still applies)")
     parser.add_argument("--confirm", action="store_true", help="execute fund-moving steps")
@@ -2288,7 +2427,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.action == "quote":
         if not args.symbol:
             raise SystemExit("--symbol required for quote")
-        return await _quote_payload(ctx, args.symbol, args.size)
+        quote_size = args.amount if args.amount is not None else 1000.0
+        return await _quote_payload(ctx, args.symbol, quote_size)
     if args.action == "deposit":
         if not args.symbol or args.amount is None:
             raise SystemExit("--symbol and --amount required for deposit")
@@ -2324,7 +2464,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     args = _parser().parse_args()
-    emit(asyncio.run(run(args)))
+    payload = asyncio.run(run(args))
+    if args.compact:
+        payload = compactify(payload)
+    emit(payload)
 
 
 if __name__ == "__main__":
