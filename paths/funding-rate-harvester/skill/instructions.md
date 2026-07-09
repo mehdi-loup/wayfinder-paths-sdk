@@ -15,8 +15,9 @@ Use this skill whenever the user wants to **harvest perp funding delta-neutrally
 
 Run everything with `python scripts/wf_run.py -- --action <action> [args]`.
 
-- `discover --top 10`: read-only. Ranks (asset, spot-leg) combos by **net stacked carry** = funding EMA + spot-leg yield − fees − slippage (amortized). Shows each leg's economics and the best spot leg per asset. Cross-checks Delta Lab `screen/perp funding_now`.
-- `quote --symbol ETH --size 1000`: full decomposition — funding APR (now + EMA), spot-leg yield, fees, slippage, net APR, break-even days. Includes the Boros lock quote when `rate_lock.enabled`.
+- `discover --top 10`: read-only. Ranks (asset, spot-leg) combos by **net stacked carry** = funding EMA + spot-leg yield − fees − slippage (amortized). Shows each leg's economics and the best spot leg per asset. Cross-checks Delta Lab `screen/perp funding_now`. The `excluded` block lists every dropped symbol/leg with a reason (OI below `min_oi_usd`, funding EMA below `min_funding_apr_bps`, realized vol above the cap, or no spot-leg yield).
+- Add `--compact` to any action for one flat row per combo (drops the nested `meta`/history detail) — use it for human review; omit it when a machine consumes the full structure.
+- `quote --symbol ETH --amount 1000` (`--size` is a deprecated alias): full decomposition — funding APR (now + EMA), spot-leg yield, fees, slippage, net APR, break-even days. Includes the Boros lock quote when `rate_lock.enabled`.
 - `deposit --symbol ETH --amount 1000 [--leg pendle_pt] [--gas 5] --confirm`: opens the pair **hedge first, then spot leg** (same-venue HL pairs fill atomically). Auto-bridges HL margin from Arbitrum USDC. Refuses below `min_net_carry_apr_bps`, above position caps, or under HL minimums ($5 deposit floor, $10 order notional).
 - `update --confirm`: the core loop — safety rails first (stale-data freeze, liquidation guard: add margin then reduce, drawdown halt, leverage-cap recheck), then negative-carry exit after grace, breakeven-gated rotation, delta-band rebalance with 1h/2×-band churn guard, and the Boros lock decision. Without `--confirm` it evaluates and reports without broadcasting.
 - `rotate [--force] --confirm`: evaluate rotation now; `--force` relaxes only the dwell (minimum-hold) gate — the breakeven and threshold gates always still apply.

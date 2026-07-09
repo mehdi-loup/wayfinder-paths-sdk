@@ -18,7 +18,6 @@ from scoring import (  # noqa: E402
     CarryComponents,
     ComboScore,
     best_combo_for_symbol,
-    boros_fixed_apr,
     breakeven_hours,
     cost_apr,
     delta_rebalance_decision,
@@ -317,12 +316,6 @@ def test_stale_data_guard():
 # ---------------------------------------------------------------------------
 # Boros rate lock
 # ---------------------------------------------------------------------------
-
-def test_boros_fixed_apr_annualizes_total_tenor_yield():
-    # 3.77% total over 22 days ≈ 62.5% simple annualized
-    assert boros_fixed_apr(0.0377, 22.0) == pytest.approx(0.0377 / 22 * 365)
-    assert boros_fixed_apr(0.05, 0.0) == 0.0
-
 
 def test_lock_opens_above_premium_threshold():
     d = lock_decision(0.15, 0.10, premium_threshold_bps=200, locked=False)

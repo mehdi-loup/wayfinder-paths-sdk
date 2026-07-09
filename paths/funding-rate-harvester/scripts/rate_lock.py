@@ -16,8 +16,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from scoring import boros_fixed_apr
-
 BOROS_PLATFORM = "hyperliquid"
 
 # Boros YU sizing depends on the market's collateral token: USDT-collateral
@@ -26,7 +24,9 @@ USDT_TOKEN_ID = 3
 HYPE_TOKEN_ID = 5
 
 # Margin heuristic (see /using-boros-adapter): required margin scales with
-# size × max(|total-tenor rate|, floor); never size YU 1:1 against collateral.
+# size × max(|implied APR|, floor); never size YU 1:1 against collateral. This
+# is deliberately conservative (no time-to-maturity discount) — it over-holds
+# collateral rather than risk a thin buffer.
 MIN_RATE_FLOOR = 0.02
 SAFETY_UTILIZATION = 0.6
 
@@ -80,13 +80,13 @@ def lock_size_yu(
 
 def required_lock_collateral(
     size_yu: float,
-    mid_apr_total_tenor: float,
+    implied_apr: float,
     *,
     rate_floor: float = MIN_RATE_FLOOR,
     utilization: float = SAFETY_UTILIZATION,
 ) -> float:
     """Collateral (in YU-denominated units) to hold the lock with buffer."""
-    return size_yu * max(abs(mid_apr_total_tenor), rate_floor) / utilization
+    return size_yu * max(abs(implied_apr), rate_floor) / utilization
 
 
 @dataclass
@@ -95,8 +95,7 @@ class LockQuote:
     symbol: str
     tenor_days: float
     maturity_ts: float
-    fixed_apr: float  # annualized, from total-tenor mid/bid
-    mid_apr_total_tenor: float
+    fixed_apr: float  # annualized implied fixed APR (executable bid, else mid)
     collateral_token_id: int
     size_yu: float
     required_collateral: float
@@ -108,7 +107,6 @@ class LockQuote:
             "tenor_days": round(self.tenor_days, 2),
             "maturity_ts": self.maturity_ts,
             "fixed_apr": round(self.fixed_apr, 6),
-            "mid_apr_total_tenor": self.mid_apr_total_tenor,
             "collateral_token_id": self.collateral_token_id,
             "size_yu": round(self.size_yu, 6),
             "required_collateral": round(self.required_collateral, 6),
@@ -162,7 +160,9 @@ class BorosRateLock:
             return False, f"quote_market_by_id failed: {market}"
         remaining_days = max((market.maturity_ts - time.time()) / 86400.0, 0.0)
         # Short YU sells fixed — the bid is the executable side when present.
-        total_tenor_rate = (
+        # These adapter fields (`*_apr`) are already annualized implied APRs; do
+        # not re-annualize by tenor.
+        fixed_apr = (
             market.best_bid_apr if market.best_bid_apr is not None else market.mid_apr
         )
         size_yu = lock_size_yu(
@@ -175,11 +175,10 @@ class BorosRateLock:
             symbol=symbol.upper(),
             tenor_days=remaining_days,
             maturity_ts=float(market.maturity_ts),
-            fixed_apr=boros_fixed_apr(float(total_tenor_rate), remaining_days),
-            mid_apr_total_tenor=float(total_tenor_rate),
+            fixed_apr=float(fixed_apr),
             collateral_token_id=int(market.collateral_token_id),
             size_yu=size_yu,
-            required_collateral=required_lock_collateral(size_yu, float(total_tenor_rate)),
+            required_collateral=required_lock_collateral(size_yu, float(fixed_apr)),
         )
 
     async def open_lock(self, quote: LockQuote) -> tuple[bool, dict[str, Any]]:

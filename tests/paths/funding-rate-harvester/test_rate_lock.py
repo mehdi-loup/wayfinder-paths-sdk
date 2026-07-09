@@ -6,6 +6,7 @@ No network. Run with:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ sys.path.insert(0, str(PATH_DIR / "scripts"))
 from rate_lock import (  # noqa: E402
     HYPE_TOKEN_ID,
     USDT_TOKEN_ID,
+    BorosRateLock,
     lock_size_yu,
     required_lock_collateral,
     select_lock_market,
@@ -100,3 +102,44 @@ def test_lock_lifecycle_open_hold_unwind():
     assert lock_decision(0.10, 0.15, premium_threshold_bps=200, locked=True).action == "unwind"
     # Not locked and premium thin → nothing to do
     assert lock_decision(0.16, 0.15, premium_threshold_bps=200, locked=False).action == "none"
+
+
+# ---------------------------------------------------------------------------
+# quote_lock uses adapter APRs as-is (they are already annualized)
+# ---------------------------------------------------------------------------
+
+class _FakeTenor:
+    def __init__(self, market_id: int, tenor_days: float, notional_oi: float) -> None:
+        self.market_id = market_id
+        self.tenor_days = tenor_days
+        self.maturity = 0
+        self.mid_apr = 0.09
+        self.notional_oi = notional_oi
+
+
+class _FakeMarket:
+    market_id = 164
+    maturity_ts = 9_999_999_999.0  # far future; remaining_days must not affect fixed_apr
+    best_bid_apr = 0.089
+    mid_apr = 0.09
+    collateral_token_id = USDT_TOKEN_ID
+
+
+class _FakeBorosAdapter:
+    async def list_tenor_quotes(self, underlying_symbol: str, platform: str):
+        return True, [_FakeTenor(164, 23.5, 700_000.0)]
+
+    async def quote_market_by_id(self, market_id: int):
+        return True, _FakeMarket()
+
+
+def test_quote_lock_reports_annualized_fixed_apr_without_reannualizing():
+    # Adapter `*_apr` fields are already annualized implied APRs. quote_lock must
+    # report the executable bid as-is, NOT re-annualize it by tenor (bid/days*365),
+    # which would inflate a 8.9% fixed rate to ~138% for a 23-day tenor.
+    lock = BorosRateLock(_FakeBorosAdapter())
+    ok, quote = asyncio.run(
+        lock.quote_lock("HYPE", short_notional_usd=1_000.0, short_size_units=0.33)
+    )
+    assert ok
+    assert quote.fixed_apr == pytest.approx(0.089)

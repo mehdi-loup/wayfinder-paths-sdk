@@ -16,7 +16,7 @@ The bundled applet (`applet/dist/index.html`) is a **static, read-only** snapsho
 
 ```bash
 python scripts/wf_run.py -- --action discover --top 10
-python scripts/wf_run.py -- --action quote --symbol ETH --size 1000
+python scripts/wf_run.py -- --action quote --symbol ETH --amount 1000
 python scripts/wf_run.py -- --action deposit --symbol ETH --amount 1000          # plan only
 python scripts/wf_run.py -- --action deposit --symbol ETH --amount 1000 --confirm
 python scripts/wf_run.py -- --action update --confirm                             # core loop
@@ -25,6 +25,8 @@ python scripts/wf_run.py -- --action unwind --confirm && python scripts/wf_run.p
 ```
 
 In the SDK repo, substitute `poetry run python paths/funding-rate-harvester/scripts/main.py` for `python scripts/wf_run.py --`.
+
+Add `--compact` to any action (e.g. `discover --compact`) for a trimmed, one-row-per-combo view for human review; the full nested structure is the default for machine consumers.
 
 ## Configuration (`inputs/config.yaml`)
 
@@ -132,6 +134,8 @@ poetry run wayfinder runner add-job --name funding-harvester-update \
 ```
 
 15-minute interval is safe: rotation is dwell/breakeven-gated, delta rebalance has a churn guard, and idempotency keys dedupe crash re-runs. **Scheduled runner executions run unattended and are not individually confirmed by an operator — treat every scheduled `update` as a live, fund-moving action and size limits (`max_position_usd`, `max_total_notional_usd`, `leverage_cap`) accordingly before enabling a schedule.** The paper/live mode-consistency guard runs inside `action_update` itself, so it also protects wrapper invocations like this one.
+
+**Shared state across invocations.** Durable state (open pairs, funding EMAs, paper hours) is pinned to a single namespace (`WAYFINDER_KV_NAMESPACE=funding_rate_harvester`, set inside `main.py`), so the interactive CLI and any runner job read and write the **same** position book automatically — a pair you open by hand is visible to the scheduled `update`, and vice versa. You do not need to set `WAYFINDER_KV_NAMESPACE` in the wrapper or job env; the path overrides it. (Runner jobs otherwise default it to the job name, which would isolate each invocation's state.)
 
 ## Risk disclosures
 

@@ -53,13 +53,6 @@ def cost_apr(total_cost_bps: float, holding_days: float) -> float:
     return (total_cost_bps / 10_000.0) * (365.0 / holding_days)
 
 
-def boros_fixed_apr(mid_apr_total_tenor: float, remaining_days: float) -> float:
-    """Boros mid_apr is the TOTAL remaining-tenor yield, not annualized."""
-    if remaining_days <= 0:
-        return 0.0
-    return (mid_apr_total_tenor / remaining_days) * 365.0
-
-
 @dataclass
 class CarryComponents:
     """Per-combo stacked carry decomposition. All fields annualized decimals."""
