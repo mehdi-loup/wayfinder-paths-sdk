@@ -1,0 +1,15 @@
+# Allowlisted spender contracts (well-known protocol routers / permit contracts).
+# A known-good spender lowers the risk score for an approval. Keyed by chain code,
+# addresses lowercased. Seed list — expand over time. Used from Phase 3 (scoring).
+spenders:
+  _any:
+    # Permit2 (canonical, same address across chains)
+    "0x000000000022d473030f116ddee9f6b43ac78ba3": "Uniswap Permit2"
+  ethereum:
+    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3 SwapRouter02"
+    "0x1111111254eeb25477b68fb85ed929f73a960582": "1inch Aggregation Router V5"
+    "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3 Pool"
+  base:
+    "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap V3 SwapRouter02 (Base)"
+  arbitrum:
+    "0x5e325eda8064b456f4781070c0738d849c824258": "Uniswap V3 SwapRouter02 (Arbitrum)"

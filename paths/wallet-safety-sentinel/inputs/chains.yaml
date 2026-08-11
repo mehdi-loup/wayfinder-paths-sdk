@@ -1,0 +1,17 @@
+# Per-chain scan parameters. chain_id is resolved from the code via the SDK's
+# CHAIN_CODE_TO_ID, so only scan tuning lives here.
+#   blockscout_url: Blockscout instance for off-quota discovery + balances (no key).
+#                   When set, the scan uses ZERO Wayfinder RPC calls for that chain.
+#   blocks_per_day / log_span: only used by the RPC getLogs fallback for chains with
+#                   no Blockscout instance (the proxy caps eth_getLogs at ~50k blocks).
+chains:
+  ethereum: { blockscout_url: "https://eth.blockscout.com", blocks_per_day: 7200, log_span: 50000 }
+  base: { blockscout_url: "https://base.blockscout.com", blocks_per_day: 43200, log_span: 50000 }
+  arbitrum: { blockscout_url: "https://arbitrum.blockscout.com", blocks_per_day: 345600, log_span: 50000 }
+  polygon: { blockscout_url: "https://polygon.blockscout.com", blocks_per_day: 39000, log_span: 50000 }
+  # BSC has no public Blockscout instance → RPC getLogs fallback (no off-quota balances).
+  bsc: { blocks_per_day: 28800, log_span: 50000 }
+  avalanche: { blocks_per_day: 43200, log_span: 50000 }
+
+# Chains scanned when --chains is not passed.
+default_chains: [ethereum, base, arbitrum, polygon, bsc]

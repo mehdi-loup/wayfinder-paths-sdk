@@ -1,0 +1,22 @@
+# Risk scoring weights + thresholds (consumed in Phase 3 — not used by the
+# Phase 2 scan core). Tunable without code changes; can be exposed as applet
+# controls later.
+unlimited_allowance_raw: !!int 57896044618658097711785492504343953926634992332820282019728792003956564819968  # 2**255
+# Per-approval risk factor weights (sum need not be 1; normalized at score time).
+weights:
+  exposure_usd: 0.35
+  unlimited: 0.20
+  spender_trust: 0.25
+  spender_age: 0.10
+  staleness: 0.10
+# Hard critical overrides (cap the wallet score regardless of weighted factors).
+critical:
+  blocklisted_spender: true
+  unlimited_to_unverified: true
+  approval_for_all_to_unverified: true
+# Wallet-score band cutoffs (0-100, higher = safer).
+bands:
+  secure: 85
+  minor: 65
+  at_risk: 40
+  # below at_risk => critical

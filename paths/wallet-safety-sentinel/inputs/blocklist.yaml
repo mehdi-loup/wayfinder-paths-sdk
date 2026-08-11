@@ -1,0 +1,8 @@
+# Known-malicious / phishing spender contracts. An approval to any of these is a
+# hard critical override regardless of exposure. Keyed by chain code (or _any for
+# cross-chain), addresses lowercased. Seed is intentionally empty — populate from
+# curated drainer feeds (e.g. Scam Sniffer / ChainPatrol) before publish.
+# Used from Phase 3 (scoring).
+spenders:
+  _any: {}
+  ethereum: {}
