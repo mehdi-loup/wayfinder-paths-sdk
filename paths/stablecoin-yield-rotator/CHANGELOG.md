@@ -118,7 +118,7 @@ supported assets or venues — purely new actions, reliability, and efficiency o
   `inputs/config.yaml` are the only gate. Emails a summary on executed rotations and on
   new failures (no-ops are silent; repeated identical halts alert once). Schedule it as a
   runner job, e.g. daily with `--cron "0 9 * * *"`. Note: runner jobs are live
-  fund-moving automation managed by the Wayfinder Shell.
+  fund-moving automation outside the Claude safety-review hook.
 - **Idle-balance sweep** — idle balances of configured stables in the wallet are planned
   as deposit legs, so a fresh wallet bootstraps into the best venue without a manual
   `deposit`.
