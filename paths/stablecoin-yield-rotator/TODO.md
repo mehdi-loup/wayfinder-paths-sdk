@@ -1,6 +1,54 @@
 # stablecoin-yield-rotator — TODO
 
-## RECOMMENDED 0.5.0 scope (research 2026-08-12)
+## AGREED 0.5.0 / 0.5.1 split (2026-08-12)
+
+**0.5.0 — quality + one free asset. Risk surface identical to 0.4.1 (no new
+chains, no new venue-chain pairs):**
+
+1. Persisted-APY / anti-churn ranking (see the section below for the design note:
+   self-collected history, not a Delta Lab dependency).
+2. PYUSD added to `assets` / `ALLOWED_STABLES` — `euler_v2` on Ethereum is
+   already reached, so this is config-only for ~113bps at depth.
+3. The `_matches_asset` case/₮ fix, shipping alongside (2) as the asset-matching
+   change; also unblocks USDT0 in 0.5.1.
+
+**Dropped: the "exit-liquidity floor" briefly proposed on 2026-08-12 — it already
+exists.** The candidate markets do run at 85–94% utilization, but the path already
+gates this end to end: `max_scan_utilization` (config, default
+`UTIL_SPIKE_CEILING` = 0.95) filters at scan time, `_passes_target_guard` re-checks
+utilization, `min_scan_tvl_usd` → `min_target_tvl_usd` and `max_scan_apy` →
+`max_target_apy` are both wired to the guard, and a target must have supply-cap
+headroom ≥ `HEADROOM_FRACTION_FLOOR` (5%) of the position. At realistic position
+sizes 90% utilization on a $42M market leaves ~$4M of free liquidity, so there is
+nothing to add. Left here as a note so it doesn't get re-proposed.
+
+Acceptance criteria: a test proving a single-cycle APY spike on a thin market does
+NOT trigger rotation while a persistent edge does; honest README/limitations update
+covering the warm-up period and what the ranker now declines to chase.
+
+**0.5.1 — the map expansion, gated on 0.5.0 landing first:** open `morpho_*` to
+`{143, 999}` and `aave_v3` to `{143}`, add USDT0, add the MON gas-top-up leg, fold
+bridge cost into the payback gate.
+
+**Why this order (the dependency that wasn't written down):** network expansion
+amplifies precisely the failure the ranker prevents. Ranking is on instantaneous
+`supply_apy`, and adding chains makes the *expensive* rotation (bridge + gas on
+both sides) reachable from a transient spike. Today's data is the worked example:
+`aave_monad` USDC shows 16.72% now against a 4.01% 7d and 3.35% 30d mean, while
+`morpho_monad` USDC is 10.68% now against 11.80% 7d. Under the current ranker the
+first scan after opening Monad bridges into the spike and mean-reverts with the
+migration cost sunk. So the ranker is a prerequisite, not a companion.
+
+Pre-flight for 0.5.1: MON resolves clean (`monad_0x0000…0000`, native, canonical),
+so the gas leg is viable. Include Aave-on-Monad even though it is low-yield — a
+chain with only one venue means a filled market forces a bridge back out instead
+of a local rotation. And note every Monad/HyperEVM row in the screen is
+`market_type: MORPHO`, i.e. **blue markets**; Morpho *vaults* are absent from that
+dataset, so vault coverage on those chains rests on the 07-16 Morpho-API note (55
+markets, 12 vaults on HyperEVM), not on anything measured on 2026-08-12 — verify
+before opening `morpho_vault`.
+
+## Supporting research — 0.5.0 candidates (research 2026-08-12)
 
 Grounded in the 200 largest USD lending markets (Delta Lab lending screen, joined
 against `VENUE_CHAIN_SUPPORT` rather than the config `chains` list). Ship these
