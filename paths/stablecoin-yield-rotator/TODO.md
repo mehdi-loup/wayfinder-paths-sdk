@@ -1,5 +1,49 @@
 # stablecoin-yield-rotator — TODO
 
+## RECOMMENDED 0.5.0 scope (research 2026-08-12)
+
+Grounded in the 200 largest USD lending markets (Delta Lab lending screen, joined
+against `VENUE_CHAIN_SUPPORT` rather than the config `chains` list). Ship these
+three together — all are config/gate level, no new adapter:
+
+1. **Open the two `morpho_*` venues to chain 143 (Monad) and 999 (HyperEVM).**
+   `morpho_monad` USDC pays **11.80% 7d-mean on $42M TVL** — the best 7d mean in
+   the entire screen — and `aave_monad` adds $385M of depth for later. Monad is
+   already an SDK-supported chain, so this is a `VENUE_CHAIN_SUPPORT` edit plus
+   `chains: [..., 143]` and per-chain gas handling (gas token is MON).
+2. **Add PYUSD to `assets` / `ALLOWED_STABLES`.** This is the cheapest gain of the
+   three: `euler_v2` on Ethereum — a venue+chain pair the path *already*
+   reaches — pays **6.38% on $67M PYUSD**, while the best reachable rate on a
+   market of that size today is 5.25%. Pure asset-list change, ~113bps at depth.
+3. **Add USDT0 + the `_matches_asset` fix** (see the section below). The screen
+   contains both `USDT0` ($979M) and `USD₮0` ($137M, 8.98%) spellings, which
+   confirms the normalization bug is load-bearing, not theoretical.
+
+**Capacity is the thing to reason about, not headline APY.** Best *reachable*
+7d-mean by minimum market size: ≥$1M → 9.76% (moonwell/base/USDC, $14M);
+≥$25M → 7.74% (morpho/ethereum/USDC, $47M); ≥$50M → 5.25% (euler/ethereum/USDC,
+$64M). The high rates the path already sees live on thin markets, so the honest
+gain from an extension shows up only at a fixed TVL floor.
+
+**The protocol axis is closed — don't spend effort there.** Of 26 SDK adapters
+only 6 expose lend+withdraw and the path already uses all 6. `avantis` is parked
+on a branch (principal risk); `sparklend` is read-only *and* Spark's $1.14B
+Ethereum markets pay 3.47%, below what the path already reaches, so wiring
+supply/withdraw upstream would buy nothing. Fluid still has no adapter. Remaining
+growth is network + asset only.
+
+Other uncovered assets, for later: RLUSD ($526M, 4.21%), AUSD (9.07% but only
+$28M), USDtb, USDG, USD0. Other uncovered SDK-supported chains: avalanche (aave
+6.89%, $92M), katana (morpho 3.53%, $21M), plasma (aave 3.60% but $949M deep),
+bsc (3.04%), megaeth (5.32%, $6.8M). Out of reach without upstream chain support:
+mantle ($155M), X Layer, Ink, gnosis, sonic, linea, celo.
+
+**Caveat:** these are screen snapshots for 2026-08-12. `aave_monad` illustrates
+why — it shows 16.72% *now* against a 4.01% 7d-mean (a spike), while
+`morpho_monad` is 10.68% now against 11.80% 7d (persistent). Re-check before
+building, and see the anti-churn section: ranking on instantaneous APY would pick
+the wrong one of those two.
+
 ## Morpho on HyperEVM (chain 999) — 0.5.0 candidate (research 2026-07-16)
 
 Cheapest high-value extension found in the 0.5.0 research pass. The path already
@@ -92,7 +136,9 @@ flagged for USDe-as-lend-asset).
 - **Fluid** is now a top-tier lending venue (USDC 4.3–5.5%) but has no SDK
   adapter — an upstream adapter project, not path work.
 - **Morpho on Monad (143):** ~7.5% on $17M TVL; SDK has the deployment, but a
-  whole new chain (gas token, bridging) — defer.
+  whole new chain (gas token, bridging) — ~~defer~~ **PROMOTED 2026-08-12: now
+  11.80% 7d-mean on $42M (plus aave_monad at $385M), the best 7d mean in the
+  screen — see the recommended 0.5.0 scope at the top.**
 - **Aave "Stable Vaults"** (launched 2026-07-09): fixed-rate stablecoin product;
   no integration surface yet — watch.
 

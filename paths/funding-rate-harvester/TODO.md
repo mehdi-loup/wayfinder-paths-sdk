@@ -3,7 +3,67 @@
 Research pass 2026-07-16 (Delta Lab perp screen + Kinetiq docs + landscape scan).
 Registry state at time of writing: 0.2.2 live + bonded + active.
 
-## kHYPE spot leg for the HYPE pair — top candidate (cheap, fits the model)
+## RECOMMENDED next scope (research 2026-08-12)
+
+From the Delta Lab perp screen (256 markets, sorted by 30d mean funding) plus an
+HL spot-availability check on every candidate.
+
+**0. Fix KAITO first — it is a live bleed, not an extension.** KAITO funding is
+**−274% 30d APR** (−1185% 7d) with only 66% positive days. Short-perp carry on it
+loses money continuously. It sits in the `universe.yaml` whitelist, and whitelisted
+symbols get seed priority, so confirm the `min_funding_apr_bps` filter actually
+excludes it — if the whitelist bypasses filtering, drop KAITO outright. This is a
+config/guard change and should land before any capability work.
+
+**Context: the current universe barely clears its own `min_net_carry_apr_bps:
+1000` gate.** 30d funding APR / positive-day %: EIGEN 9.9/96, ETHFI 9.3/95,
+ENA 9.3/94, HYPE 8.8/91, ETH 8.2/93, BTC 7.5/92, SOL 4.7/77. The gross carry only
+clears 10% once a yield leg is stacked on top, which is why the asset axis matters.
+
+**1. Add PURR — the one free asset win.** Far better persistent carry exists on
+vanilla Hyperliquid (30d APR / pos%): VINE 34.3/100, XMR 22.6/86, STBL 21.5/100,
+ZRO 19.3/96, **PURR 18.3/100**, VVV 15.9/98, GRASS 14.5/100, GRIFFAIN 13.8/100,
+FARTCOIN 13.3/97, AZTEC 11.7/100, GOAT 11.2/100, BRETT 11/100. But the long leg
+gates all of it: an HL spot check found **only PURR has a spot market**
+(`PURR/USDC`), so PURR is the sole addition that works with the existing
+`hl_spot` leg as-is. (CASHCAT at 129% and SAGA at 98% are almost certainly
+illiquidity traps — see the sizing caveat below.)
+
+**2. Highest-leverage capability: a generic BRAP on-chain spot leg.** That is
+precisely what unlocks the rest of the list above, and it just got cheaper —
+upstream merged Solana BRAP + transfer execution, and FARTCOIN/GRASS/GOAT/BRETT
+are Solana/Base assets. This supersedes the kHYPE leg as the top capability pick
+(kHYPE remains valid and is a strict subset of the same "swap in, swap out" leg
+shape — do it as the first instance of the generic leg rather than a bespoke one).
+
+**kHYPE verified 2026-08-12:** `Kinetiq Staked HYPE` / `KHYPE` at
+`hyperevm_0xfd739d4e423301ce9385c1fb8850539d657c296d` (~$56.41). Kinetiq now also
+ships `VKHYPE` (Earn Vault) and `KMHYPE` (Markets HYPE) — three wrappers to pick
+from. Entry/exit by open-market swap only, never native unstake (8–9 day delay).
+
+**3. Boros rate lock is already wired and merely `enabled: false`** in
+`inputs/config.yaml` — turning it on is a config decision, not development work.
+See the "no work needed" section below.
+
+**Sizing caveat that applies to everything above:** Delta Lab perp rows carry no
+OI or volume (`oi_now` / `volume_24h` are null), so none of these rates are
+size-screened. Pull OI from the HL API before admitting any symbol — the
+`min_oi_usd: 10_000_000` filter in `universe.yaml` cannot be enforced from the
+Delta Lab screen alone.
+
+**Free input for the carry-quality work below:** the same screen responses already
+carry `funding_pos_pct_30d`, `funding_std_7d/30d`, and `funding_z_30d/90d`, so the
+persistence/volatility scoring needs no new data dependency.
+
+**HIP-3 keeps expanding:** the screen now shows `hyperliquid-xyz`, `-para`,
+`-hyna`, and `-mkts` dexes. Dynamic discovery still pins `venue="hyperliquid"`, so
+none are visible — and the blocker is unchanged (no on-chain spot hedge for
+equities), see the HIP-3 section below.
+
+## kHYPE spot leg for the HYPE pair — cheap, fits the model
+<!-- Reframed 2026-08-12: no longer the top pick on its own — build it as the first
+     instance of the generic BRAP spot leg (see recommended scope above). -->
+
 
 HYPE is whitelisted and its funding is the most *persistent* carry in the
 universe right now: 7d-mean ≈ 9.6% APR, positive 95% of the last 30 days
