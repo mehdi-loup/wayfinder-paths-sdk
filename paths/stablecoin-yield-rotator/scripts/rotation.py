@@ -12,7 +12,9 @@ Given a flat scan and a list of current positions, propose rotations subject to:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from statistics import median
 from typing import Any
 
 from venues import EXECUTABLE_VENUES, Position, VenueRow
@@ -20,6 +22,19 @@ from venues import EXECUTABLE_VENUES, Position, VenueRow
 UTIL_SPIKE_CEILING = 0.95
 HEADROOM_FRACTION_FLOOR = 0.05
 DEFAULT_MAX_STABLECOIN_APY = 0.50
+
+# Anti-churn ranking. Ranking on the instantaneous supply APY lets a one-cycle
+# spike on a thin market trigger a gas-paying rotation that immediately
+# mean-reverts, so rank on the trailing median of what we have actually observed
+# (floored by the current rate). See `effective_apy`.
+DEFAULT_APY_PERSISTENCE_HOURS = 72.0
+# A market we have no history for yet must clear this multiple of
+# min_apy_delta_bps. Keeps the path useful during warm-up (and right after a new
+# market appears) without letting an unverified reading win on its first sighting.
+WARMUP_DELTA_MULTIPLIER = 2
+
+# market key -> [(unix_ts, supply_apy), ...]
+ApyHistory = dict[str, list[Any]]
 
 # Pseudo-venue for idle wallet balances. Positions with this venue earn 0% and
 # need no unlend step — the planner turns them into deposit legs.
@@ -162,15 +177,58 @@ def leg_from_dict(d: dict[str, Any]) -> RotationLeg:
     )
 
 
-def _best_target_for_asset(rows: list[VenueRow], asset: str) -> list[VenueRow]:
-    """Return rows for `asset` sorted by supply_apy descending. Only executable venues are eligible
+def market_key(venue: str, chain_id: int, market_id: str) -> str:
+    return f"{venue}|{chain_id}|{str(market_id).lower()}"
+
+
+def effective_apy(
+    row: VenueRow,
+    apy_history: ApyHistory | None,
+    *,
+    now: float,
+    persistence_hours: float = DEFAULT_APY_PERSISTENCE_HOURS,
+) -> tuple[float, bool]:
+    """Return `(apy_used_for_ranking, has_history)` for one market.
+
+    The ranking rate is the **lower of the trailing median and the current rate**,
+    which is conservative in both directions: a one-cycle spike cannot lift a market
+    (the median ignores a single outlier — a mean does not; a 16.7% print against
+    five 4.1% samples still averages to 6.2%, which is enough to pull a position),
+    and a market whose rate just collapsed cannot hide behind stale highs (the
+    current reading floors it).
+
+    The cost is deliberate lag: a market that genuinely steps up is only recognised
+    once the step is over half the window. `apy_history=None` disables all of this
+    (legacy instantaneous ranking) and reports `has_history=True` so callers don't
+    apply the warm-up penalty.
+    """
+    if apy_history is None:
+        return row.supply_apy, True
+    samples = apy_history.get(market_key(row.venue, row.chain_id, row.market_id)) or []
+    cutoff = now - persistence_hours * 3600.0
+    recent = [float(s[1]) for s in samples if len(s) >= 2 and float(s[0]) >= cutoff]
+    if not recent:
+        return row.supply_apy, False
+    return min(median(recent), row.supply_apy), True
+
+
+def _best_target_for_asset(
+    rows: list[VenueRow], asset: str, apy_by_key: dict[str, tuple[float, bool]] | None = None
+) -> list[VenueRow]:
+    """Return rows for `asset` sorted by ranking APY descending. Only executable venues are eligible
     targets — non-executable venues remain visible via scan/status but won't be planned for rotation."""
     matching = [
         r for r in rows
         if r.asset_symbol == asset and r.venue in EXECUTABLE_VENUES
         and not r.is_frozen and not r.is_paused
     ]
-    matching.sort(key=lambda r: r.supply_apy, reverse=True)
+
+    def rank(row: VenueRow) -> float:
+        if apy_by_key is None:
+            return row.supply_apy
+        return apy_by_key[market_key(row.venue, row.chain_id, row.market_id)][0]
+
+    matching.sort(key=rank, reverse=True)
     return matching
 
 
@@ -232,6 +290,9 @@ def quote_rotation(
     max_target_apy: float | None = DEFAULT_MAX_STABLECOIN_APY,
     gas_topup_usd_by_chain: dict[int, float] | None = None,
     gasless_source_chains: set[int] | None = None,
+    apy_history: ApyHistory | None = None,
+    apy_persistence_hours: float = DEFAULT_APY_PERSISTENCE_HOURS,
+    now_ts: float | None = None,
 ) -> RotationPlan:
     """Build a rotation plan that satisfies all configured constraints.
 
@@ -244,8 +305,22 @@ def quote_rotation(
     `gasless_source_chains` are chains where the wallet cannot even sign the first
     transaction — legs sourced there are skipped (a top-up cannot be executed from a
     chain with no gas).
+
+    `apy_history` switches ranking from the instantaneous supply APY to the trailing
+    median over `apy_persistence_hours`, floored by the current rate (see
+    `effective_apy`). Pass `None` to keep the
+    pre-0.5.0 instantaneous behaviour. Every APY this function reports — including
+    `current_apy`/`target_apy` on the legs and the uplift the payback gate uses — is
+    the ranking APY, so the economics match the decision that was actually made.
     """
     blocked = {m.lower() for m in (blocklist_markets or [])}
+    now = time.time() if now_ts is None else now_ts
+    apy_by_key: dict[str, tuple[float, bool]] = {
+        market_key(r.venue, r.chain_id, r.market_id): effective_apy(
+            r, apy_history, now=now, persistence_hours=apy_persistence_hours
+        )
+        for r in scan
+    }
     topup_usd_by_chain = gas_topup_usd_by_chain or {}
     gasless_sources = gasless_source_chains or set()
     plan = RotationPlan()
@@ -259,7 +334,10 @@ def quote_rotation(
     venue_cap_fraction = max_position_pct_per_venue / 100.0
 
     for asset, asset_positions in by_asset.items():
-        targets = [r for r in _best_target_for_asset(scan, asset) if r.market_id.lower() not in blocked]
+        targets = [
+            r for r in _best_target_for_asset(scan, asset, apy_by_key)
+            if r.market_id.lower() not in blocked
+        ]
         if not targets:
             continue
 
@@ -305,7 +383,7 @@ def quote_rotation(
                 continue
             else:
                 current_apy_candidates = [
-                    r.supply_apy for r in scan
+                    apy_by_key[market_key(r.venue, r.chain_id, r.market_id)][0] for r in scan
                     if r.venue == pos.venue and r.chain_id == pos.chain_id and r.market_id == pos.market_id
                 ]
                 if not current_apy_candidates:
@@ -321,14 +399,32 @@ def quote_rotation(
             # passes constraints. Walk down the ranked list so utilization-spike
             # skips fall through to the second-best.
             chosen: VenueRow | None = None
+            chosen_apy = 0.0
             chosen_skip_reason: str | None = None
             for cand in targets:
                 if cand.venue == pos.venue and cand.chain_id == pos.chain_id and cand.market_id == pos.market_id:
                     continue
-                delta_bps = int(round((cand.supply_apy - current_apy) * 10_000))
+                cand_apy, cand_has_history = apy_by_key[
+                    market_key(cand.venue, cand.chain_id, cand.market_id)
+                ]
+                delta_bps = int(round((cand_apy - current_apy) * 10_000))
                 if delta_bps < min_apy_delta_bps:
                     chosen_skip_reason = f"apy_delta {delta_bps}bps < min {min_apy_delta_bps}bps"
                     break  # ranked list — nothing below will beat min_apy_delta_bps
+
+                # Warm-up bar for a market we have never observed before. Deliberately
+                # `continue`, not `break`: a lower-ranked market that *does* have
+                # history can still clear the base threshold.
+                required_bps = (
+                    min_apy_delta_bps if cand_has_history
+                    else min_apy_delta_bps * WARMUP_DELTA_MULTIPLIER
+                )
+                if delta_bps < required_bps:
+                    chosen_skip_reason = (
+                        f"apy_delta {delta_bps}bps < warm-up min {required_bps}bps "
+                        "(no APY history for this market yet)"
+                    )
+                    continue
 
                 ok, reason = _passes_target_guard(
                     cand,
@@ -340,6 +436,7 @@ def quote_rotation(
                     chosen_skip_reason = reason
                     continue
                 chosen = cand
+                chosen_apy = cand_apy
                 break
 
             if chosen is None:
@@ -395,8 +492,8 @@ def quote_rotation(
                         raw_amount=pos.supply_raw,
                         decimals=pos.decimals,
                         current_apy=current_apy,
-                        target_apy=chosen.supply_apy,
-                        apy_delta_bps=int(round((chosen.supply_apy - current_apy) * 10_000)),
+                        target_apy=chosen_apy,
+                        apy_delta_bps=int(round((chosen_apy - current_apy) * 10_000)),
                         estimated_uplift_usd_30d=0.0,
                         estimated_gas_usd=0.0,
                         estimated_bridge_fee_usd=0.0,
@@ -410,7 +507,7 @@ def quote_rotation(
                 raw_amount = min(raw_amount, allowed_raw)
 
             is_cross_chain = chosen.chain_id != pos.chain_id
-            target_apy = chosen.supply_apy
+            target_apy = chosen_apy
             apy_delta_bps = int(round((target_apy - current_apy) * 10_000))
 
             position_usd = (raw_amount / (10 ** pos.decimals)) * asset_price_usd

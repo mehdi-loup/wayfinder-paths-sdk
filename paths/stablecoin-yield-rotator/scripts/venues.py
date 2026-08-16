@@ -53,7 +53,7 @@ VENUE_CHAIN_SUPPORT: dict[str, set[int]] = {
 # read-only via the path because SparkLendAdapter has no supply/withdraw methods.
 EXECUTABLE_VENUES: set[str] = {"aave_v3", "morpho_blue_market", "morpho_vault", "euler_v2", "hyperlend", "moonwell"}
 
-ALLOWED_STABLES = {"USDC", "USDT", "DAI", "USDS", "USDE", "GHO"}
+ALLOWED_STABLES = {"USDC", "USDT", "DAI", "USDS", "USDE", "GHO", "PYUSD"}
 
 # Underlying decimals for venues that don't report them (Moonwell market reads
 # expose mToken decimals, not the underlying's). Everything else is 6.
@@ -140,9 +140,12 @@ class Position:
 
 
 def _matches_asset(symbol: str | None, allowed: set[str]) -> bool:
+    # `allowed` is upper-cased, but `normalize_symbol` returns lower-case — comparing
+    # the two directly never matched, which also made its ₮→T translation dead code
+    # (so HyperEVM's "USD₮0" was invisible). Compare case-insensitively.
     if not symbol:
         return False
-    canonical = normalize_symbol(symbol) or symbol.upper()
+    canonical = (normalize_symbol(symbol) or symbol).upper()
     if canonical in allowed:
         return True
     return symbol.upper() in allowed

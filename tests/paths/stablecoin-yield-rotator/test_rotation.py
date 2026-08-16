@@ -221,3 +221,146 @@ def test_per_asset_decimal_handling(asset, decimals):
     assert plan.legs
     # Uplift should be ~3% of 100k for ~30/365 of a year.
     assert plan.legs[0].estimated_uplift_usd_30d == pytest.approx(100_000 * 0.03 * 30 / 365, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# anti-churn ranking (0.5.0)
+# ---------------------------------------------------------------------------
+
+NOW = 1_760_000_000.0
+HOUR = 3600.0
+
+
+def _history(*, spike_market: str | None = None, steady_market: str | None = None) -> dict:
+    """History where `spike_market` has been mediocre for days and `steady_market`
+    has genuinely paid its current rate."""
+    history: dict[str, list[list[float]]] = {}
+    if spike_market:
+        history[spike_market] = [[NOW - h * HOUR, 0.041] for h in (60, 48, 36, 24, 12)]
+    if steady_market:
+        history[steady_market] = [[NOW - h * HOUR, 0.060] for h in (60, 48, 36, 24, 12)]
+    return history
+
+
+def test_one_cycle_spike_does_not_trigger_rotation():
+    """A thin market spiking to 16% for a single cycle must not pull the position:
+    its trailing mean is barely above the incumbent."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xSPIKE", 0.167, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    plan = quote_rotation(
+        scan=scan,
+        positions=positions,
+        min_apy_delta_bps=50,
+        max_position_pct_per_venue=100,
+        apy_history=_history(
+            spike_market="morpho_blue_market|8453|0xspike",
+        )
+        | {"aave_v3|8453|0xa": [[NOW - h * HOUR, 0.040] for h in (60, 48, 36, 24, 12)]},
+        now_ts=NOW,
+    )
+    assert not plan.legs, f"spike should not rotate, got {[leg.to_market_id for leg in plan.legs]}"
+
+
+def test_persistent_edge_does_trigger_rotation():
+    """Same headline APY gap, but the target has actually paid it for days."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xSTEADY", 0.060, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    plan = quote_rotation(
+        scan=scan,
+        positions=positions,
+        min_apy_delta_bps=50,
+        max_position_pct_per_venue=100,
+        apy_history=_history(steady_market="morpho_blue_market|8453|0xsteady")
+        | {"aave_v3|8453|0xa": [[NOW - h * HOUR, 0.040] for h in (60, 48, 36, 24, 12)]},
+        now_ts=NOW,
+    )
+    assert plan.legs, f"persistent edge should rotate; skipped={[s.skip_reason for s in plan.skipped]}"
+    assert plan.legs[0].to_venue == "morpho_blue_market"
+
+
+def test_unknown_market_must_clear_doubled_delta_during_warmup():
+    """No history for the target: it needs 2x min_apy_delta_bps, not 1x."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xNEW", 0.047, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    incumbent = {"aave_v3|8453|0xa": [[NOW - h * HOUR, 0.040] for h in (60, 48, 36, 24, 12)]}
+
+    # 70bps clears the base 50bps bar but not the 100bps warm-up bar.
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, apy_history=incumbent, now_ts=NOW,
+    )
+    assert not plan.legs
+    assert "warm-up" in (plan.skipped[0].skip_reason or "")
+
+    # 150bps clears it.
+    scan[1] = _row("morpho_blue_market", 8453, "USDC", "0xNEW", 0.055, tvl_usd=42_000_000)
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, apy_history=incumbent, now_ts=NOW,
+    )
+    assert plan.legs and plan.legs[0].to_market_id == "0xNEW"
+
+
+def test_warmup_penalty_does_not_hide_a_lower_ranked_market_with_history():
+    """The no-history skip must `continue`, not `break`: a lower-ranked market that
+    does have history can still clear the base threshold."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xNEW", 0.047, tvl_usd=42_000_000),
+        _row("euler_v2", 8453, "USDC", "0xSTEADY", 0.046, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    history = {
+        "aave_v3|8453|0xa": [[NOW - h * HOUR, 0.040] for h in (60, 48, 36, 24, 12)],
+        "euler_v2|8453|0xsteady": [[NOW - h * HOUR, 0.046] for h in (60, 48, 36, 24, 12)],
+    }
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, apy_history=history, now_ts=NOW,
+    )
+    assert plan.legs and plan.legs[0].to_venue == "euler_v2"
+
+
+def test_history_outside_the_window_is_ignored():
+    """Samples older than apy_persistence_hours don't count, so a market whose only
+    history is ancient is treated as unseen (warm-up bar applies)."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xOLD", 0.047, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    history = {
+        "aave_v3|8453|0xa": [[NOW - 2 * HOUR, 0.040]],
+        "morpho_blue_market|8453|0xold": [[NOW - 500 * HOUR, 0.047]],
+    }
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, apy_history=history,
+        apy_persistence_hours=72, now_ts=NOW,
+    )
+    assert not plan.legs
+    assert "warm-up" in (plan.skipped[0].skip_reason or "")
+
+
+def test_legacy_mode_without_history_is_unchanged():
+    """apy_history=None keeps the pre-0.5.0 instantaneous behaviour (no warm-up bar),
+    so existing callers and the 0.4.1 test suite behave identically."""
+    scan = [
+        _row("aave_v3", 8453, "USDC", "0xA", 0.040),
+        _row("morpho_blue_market", 8453, "USDC", "0xNEW", 0.047, tvl_usd=42_000_000),
+    ]
+    positions = [_position("aave_v3", 8453, "USDC", "0xA", 100_000 * 10**6)]
+    plan = quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100, apy_history=None,
+    )
+    assert plan.legs and plan.legs[0].to_market_id == "0xNEW"

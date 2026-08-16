@@ -12,6 +12,7 @@ Run from repo root:
 from __future__ import annotations
 
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -22,6 +23,7 @@ PATH_DIR = Path(__file__).resolve().parents[3] / "paths/stablecoin-yield-rotator
 sys.path.insert(0, str(PATH_DIR / "scripts"))
 
 import main as rotator  # noqa: E402
+import rotation  # noqa: E402
 from rotation import DiscoveryGapError  # noqa: E402
 from venues import Position, VenueRow  # noqa: E402
 
@@ -1812,3 +1814,38 @@ def test_leg_summary_falls_back_to_planned_without_receipt():
     }}  # errored leg: no receipts
     line = rotator._leg_summary_line(entry)
     assert "1,000.00:" in line
+
+
+def test_apy_history_round_trip_and_interval_dedupe(tmp_path, monkeypatch):
+    """Samples survive the monitor-state JSON round-trip in the shape the ranker
+    reads, and a second record inside the dedupe interval doesn't stuff the series."""
+    monkeypatch.setenv("WAYFINDER_RUNNER_DIR", str(tmp_path))
+    monkeypatch.setenv("WAYFINDER_KV_NAMESPACE", "test-apy-history")
+
+    rows = [
+        VenueRow(
+            venue="morpho_blue_market", chain_id=8453, asset_symbol="USDC",
+            asset_address="0x" + "0" * 40, market_id="0xABC",
+            decimals=6, supply_apy=0.071, utilization=0.5,
+            supply_cap_headroom_raw=None, tvl_usd=1_000_000.0,
+        )
+    ]
+    config = {"constraints": {"apy_persistence_hours": 72}}
+
+    rotator._record_apy_samples(rows, config)
+    history = rotator._load_apy_history()
+    key = "morpho_blue_market|8453|0xabc"
+    assert key in history, history
+    assert len(history[key]) == 1
+    assert history[key][0][1] == pytest.approx(0.071)
+
+    # Immediate re-record is inside APY_HISTORY_MIN_SAMPLE_INTERVAL_S -> no new sample.
+    rotator._record_apy_samples(rows, config)
+    assert len(rotator._load_apy_history()[key]) == 1
+
+    # The ranker consumes what was persisted (round-tripped lists, not tuples).
+    apy, has_history = rotation.effective_apy(
+        rows[0], rotator._load_apy_history(), now=time.time(), persistence_hours=72
+    )
+    assert has_history is True
+    assert apy == pytest.approx(0.071)

@@ -2,6 +2,37 @@
 
 Notable changes to the Stablecoin Yield Rotator path.
 
+## 0.5.0
+
+First release to expand capability beyond reliability work. Same chains and venues as
+0.4.1 — the risk surface is unchanged — plus one new asset and a materially more
+conservative ranker.
+
+### Added
+
+- **Anti-churn ranking on observed APY persistence.** Markets were ranked on the
+  *instantaneous* supply APY, so a one-cycle spike on a thin market could trigger a
+  gas-paying rotation that immediately mean-reverted. Ranking now uses the lower of the
+  trailing median over `constraints.apy_persistence_hours` (new, default 72h) and the
+  current rate — conservative in both directions: a single spike can't lift a market
+  (a *mean* is not enough here: one 16.7% print against five 4.1% samples still averages
+  6.2%, which is plenty to pull a position), and a collapsed rate can't hide behind stale
+  highs. APY history is collected locally on each fresh scan into durable runner monitor
+  state, so it needs no new data dependency. Until a market has any history it must clear
+  2× `min_apy_delta_bps`, which keeps the path usable during warm-up without letting an
+  unverified reading win on first sighting. Every APY the planner reports — including
+  each leg's `current_apy`/`target_apy` and the uplift behind the payback gate — is now
+  this ranking APY, so the reported economics match the decision actually made.
+- **PYUSD** added to the default asset set. It lends on `euler_v2` on Ethereum, a
+  venue+chain pair the path already reached, so this adds no new execution surface.
+
+### Fixed
+
+- **`_matches_asset` never matched its normalized branch.** It compared the lower-case
+  output of `normalize_symbol()` against an upper-case allow-set, so that branch always
+  fell through — which also made the ₮→T translation dead code and left HyperEVM's
+  "USD₮0" markets invisible to asset matching. Now compares case-insensitively.
+
 ## 0.4.1
 
 Documentation truthfulness and applet freshness. No changes to assets, venues, actions,

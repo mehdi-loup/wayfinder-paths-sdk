@@ -2,7 +2,7 @@
 # Set a label only to pin a specific wallet from config.json.
 wallet:
 chains: [1, 137, 8453, 42161, 999]
-assets: [USDC, USDT, DAI, USDS, USDE, GHO]
+assets: [USDC, USDT, DAI, USDS, USDE, GHO, PYUSD]
 # sparklend is read-only in this adapter (no lend/unlend exposed); excluded from
 # the default executable set. Re-add only when SparkLendAdapter exposes supply/withdraw.
 venues: [aave_v3, morpho_blue_market, morpho_vault, euler_v2, hyperlend, moonwell]
@@ -13,6 +13,12 @@ constraints:
   max_position_pct_per_venue: 50
   min_scan_tvl_usd: 100000
   max_scan_apy: 0.5
+  # Anti-churn: rank markets on the trailing median of observed APY over this
+  # window (floored by the current rate) instead of the instantaneous rate, so a
+  # one-cycle spike can't trigger a gas-paying rotation that mean-reverts. History is collected locally on each
+  # fresh scan, so the gate strengthens over the first few runs; until a market has
+  # any history it must clear 2x min_apy_delta_bps to be rotated into.
+  apy_persistence_hours: 72
   blocklist_markets: []
 slippage_bps: 30
 # Max concurrent reads through the Wayfinder RPC proxy (rate-limited per API key).

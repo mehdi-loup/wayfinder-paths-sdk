@@ -96,6 +96,14 @@ service; dedupe state lives in `./.wayfinder/runner/job_state/`.
 
 ## Limitations
 
+- **Ranking lags on purpose, and needs a warm-up.** Markets are ranked on the trailing
+  median APY over `constraints.apy_persistence_hours` (default 72h), floored by the
+  current rate, so the path deliberately declines to chase a rate it has not seen hold —
+  including a genuine step-up, which it only acts on once the new rate is over half the
+  window. History is collected locally on each *fresh* scan (a cached scan is not
+  re-recorded), so a brand-new install has none: until a market has any history it must
+  clear **2× `min_apy_delta_bps`** to be rotated into. Expect the first few runs to be
+  more conservative than steady state.
 - No borrow legs / leverage loops.
 - No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only. USDe is supported as a plain lend asset; note it carries Ethena protocol risk on top of venue risk.
 - SparkLend: read-only via this path. `SparkLendAdapter` exposes only borrow/repay (plus reads), no `lend`/`unlend`. Add `sparklend` back to `inputs/config.yaml` once the adapter exposes supply/withdraw — until then, rotations into/out of SparkLend are blocked at the dispatcher with `NotImplementedError`.

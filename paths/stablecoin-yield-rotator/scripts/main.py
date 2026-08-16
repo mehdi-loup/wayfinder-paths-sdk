@@ -32,13 +32,16 @@ PATH_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PATH_DIR / "scripts"))
 
 from rotation import (  # noqa: E402
+    DEFAULT_APY_PERSISTENCE_HOURS,
     DEFAULT_MAX_STABLECOIN_APY,
     HEADROOM_FRACTION_FLOOR,
     UTIL_SPIKE_CEILING,
     WALLET_VENUE,
+    ApyHistory,
     RotationLeg,
     RotationPlan,
     leg_to_dict,
+    market_key,
     quote_rotation,
 )
 from venues import (  # noqa: E402
@@ -84,6 +87,16 @@ from wayfinder_paths.runner.monitor_state import (  # noqa: E402
 SCAN_CACHE_DIR = PATH_DIR / "inputs" / ".scan_cache"
 SCAN_CACHE_TTL_SECONDS = 21600  # 6h
 SCAN_CACHE_SCHEMA_VERSION = 1
+
+# Durable APY history behind the anti-churn ranking. Samples are only appended on a
+# *fresh* scan: replaying a cached scan would stamp stale readings with new
+# timestamps and make a one-off spike look like it persisted.
+APY_HISTORY_STATE = "apy_history"
+APY_HISTORY_SCHEMA_VERSION = 1
+APY_HISTORY_MIN_SAMPLE_INTERVAL_S = 1800
+APY_HISTORY_MAX_SAMPLES_PER_MARKET = 64
+# Keep a margin beyond the ranking window so a slightly late run still has history.
+APY_HISTORY_RETENTION_FACTOR = 1.5
 
 # ---------------------------------------------------------------------------
 # IO helpers
@@ -167,6 +180,43 @@ def _rows_from_dicts(rows: list[dict[str, Any]]) -> list[VenueRow]:
     return [VenueRow(**row) for row in rows]
 
 
+def _apy_persistence_hours(config: dict[str, Any]) -> float:
+    constraints = config.get("constraints") or {}
+    return float(constraints.get("apy_persistence_hours", DEFAULT_APY_PERSISTENCE_HOURS))
+
+
+def _load_apy_history() -> ApyHistory:
+    state = read_monitor_state(APY_HISTORY_STATE, default={})
+    markets = state.get("markets")
+    return markets if isinstance(markets, dict) else {}
+
+
+def _record_apy_samples(rows: list[VenueRow], config: dict[str, Any]) -> None:
+    """Append one APY sample per freshly-scanned market to durable monitor state.
+
+    Old samples age out past the ranking window, and a per-market minimum interval
+    keeps repeated calls in one session from stuffing the series.
+    """
+    now = time.time()
+    retention_s = _apy_persistence_hours(config) * 3600.0 * APY_HISTORY_RETENTION_FACTOR
+    history = {
+        key: [s for s in samples if len(s) >= 2 and now - float(s[0]) <= retention_s]
+        for key, samples in _load_apy_history().items()
+    }
+    for row in rows:
+        key = market_key(row.venue, row.chain_id, row.market_id)
+        samples = history.get(key) or []
+        if samples and now - float(samples[-1][0]) < APY_HISTORY_MIN_SAMPLE_INTERVAL_S:
+            continue
+        samples.append([now, float(row.supply_apy)])
+        history[key] = samples[-APY_HISTORY_MAX_SAMPLES_PER_MARKET:]
+    write_monitor_state(APY_HISTORY_STATE, {
+        "schema": APY_HISTORY_SCHEMA_VERSION,
+        "updated_ts": int(now),
+        "markets": {key: samples for key, samples in history.items() if samples},
+    })
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f"{path.suffix}.tmp")
@@ -217,6 +267,10 @@ async def _scan_all_cached(
         "failures": failures,
         "rows": [row.to_dict() for row in rows],
     })
+    try:
+        _record_apy_samples(rows, config)
+    except Exception as exc:  # noqa: BLE001 - ranking history is best-effort, never block a scan
+        logger.warning(f"could not record APY history: {exc}")
     return rows
 
 
@@ -1011,6 +1065,8 @@ async def _build_typed_plan(config: dict[str, Any], address: str) -> tuple[Rotat
             if constraints.get("min_scan_tvl_usd") is not None
             else None
         ),
+        apy_history=_load_apy_history(),
+        apy_persistence_hours=_apy_persistence_hours(config),
         max_target_apy=(
             float(constraints["max_scan_apy"])
             if constraints.get("max_scan_apy") is not None
