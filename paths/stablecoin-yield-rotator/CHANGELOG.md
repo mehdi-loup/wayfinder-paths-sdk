@@ -23,6 +23,11 @@ conservative ranker.
   unverified reading win on first sighting. Every APY the planner reports — including
   each leg's `current_apy`/`target_apy` and the uplift behind the payback gate — is now
   this ranking APY, so the reported economics match the decision actually made.
+- **`deposit` ranks on the same persisted-APY basis as rotation.** It previously sorted
+  candidate venues by the instantaneous `supply_apy`, so a manual "deposit into the best
+  yield" could still be placed into a transient spike that the rotator itself would have
+  declined to chase. No warm-up threshold is applied here — a deposit has no incumbent to
+  beat, it just picks the best-ranked venue.
 - **PYUSD** added to the default asset set. It lends on `euler_v2` on Ethereum, a
   venue+chain pair the path already reached, so this adds no new execution surface.
 

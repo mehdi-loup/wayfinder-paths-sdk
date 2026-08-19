@@ -3,7 +3,7 @@
 **Slug:** `stablecoin-yield-rotator`
 **Primary kind:** strategy
 **Risk tier:** execution
-**One-liner:** Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
+**One-liner:** Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO/PYUSD) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
 
 ---
 
@@ -50,7 +50,7 @@ paths/stablecoin-yield-rotator/
 ```yaml
 wallet: main
 chains: [1, 137, 8453, 42161, 999]       # ethereum, polygon, base, arbitrum, hyperevm
-assets: [USDC, USDT, DAI, USDS, USDE, GHO]
+assets: [USDC, USDT, DAI, USDS, USDE, GHO, PYUSD]
 venues: [aave_v3, morpho_blue_market, morpho_vault, euler_v2, hyperlend]
 constraints:
   min_apy_delta_bps: 50                   # don't rotate for <50bps improvement

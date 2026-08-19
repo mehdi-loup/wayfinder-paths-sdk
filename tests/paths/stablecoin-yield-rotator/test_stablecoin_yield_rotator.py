@@ -1844,8 +1844,76 @@ def test_apy_history_round_trip_and_interval_dedupe(tmp_path, monkeypatch):
     assert len(rotator._load_apy_history()[key]) == 1
 
     # The ranker consumes what was persisted (round-tripped lists, not tuples).
+    # One sample is NOT history: the scan records the current reading before the
+    # planner loads it, so a first sighting always holds exactly one sample.
     apy, has_history = rotation.effective_apy(
         rows[0], rotator._load_apy_history(), now=time.time(), persistence_hours=72
     )
-    assert has_history is True
+    assert has_history is False
     assert apy == pytest.approx(0.071)
+
+
+def test_warmup_bar_survives_the_record_then_plan_ordering(tmp_path, monkeypatch):
+    """Regression: `_scan_all_cached` records the current reading *before*
+    `_build_typed_plan` loads history, so a first-seen market arrives already
+    holding one sample. That must not count as history, or the advertised 2x
+    warm-up bar is silently skipped on exactly the sighting it exists for."""
+    monkeypatch.setenv("WAYFINDER_RUNNER_DIR", str(tmp_path))
+    monkeypatch.setenv("WAYFINDER_KV_NAMESPACE", "test-warmup-ordering")
+
+    def _row(venue, market_id, apy):
+        return VenueRow(
+            venue=venue, chain_id=8453, asset_symbol="USDC",
+            asset_address="0x" + "0" * 40, market_id=market_id,
+            decimals=6, supply_apy=apy, utilization=0.5,
+            supply_cap_headroom_raw=None, tvl_usd=42_000_000.0,
+        )
+
+    config = {"constraints": {"apy_persistence_hours": 72}}
+    scan = [_row("aave_v3", "0xA", 0.040), _row("morpho_blue_market", "0xNEW", 0.047)]
+    positions = [Position(
+        venue="aave_v3", chain_id=8453, asset_symbol="USDC",
+        asset_address="0x" + "0" * 40, market_id="0xA",
+        decimals=6, supply_raw=100_000 * 10**6, supply_usd=100_000.0,
+    )]
+
+    # Exactly the real ordering: fresh scan records, then the planner loads.
+    rotator._record_apy_samples(scan, config)
+    plan = rotator.quote_rotation(
+        scan=scan, positions=positions, min_apy_delta_bps=50,
+        max_position_pct_per_venue=100,
+        apy_history=rotator._load_apy_history(), apy_persistence_hours=72,
+    )
+    # 70bps clears the base bar but not the 100bps warm-up bar.
+    assert not plan.legs, f"first sighting must face the warm-up bar, got {[leg.apy_delta_bps for leg in plan.legs]}"
+    assert "warm-up" in (plan.skipped[0].skip_reason or "")
+
+
+def test_deposit_ranks_on_persisted_apy_not_the_spike(tmp_path, monkeypatch):
+    """A deposit must not be placed into a market whose high rate is a one-off
+    print, when a steadier venue is available."""
+    monkeypatch.setenv("WAYFINDER_RUNNER_DIR", str(tmp_path))
+    monkeypatch.setenv("WAYFINDER_KV_NAMESPACE", "test-deposit-ranking")
+
+    def _row(venue, market_id, apy):
+        return VenueRow(
+            venue=venue, chain_id=8453, asset_symbol="USDC",
+            asset_address="0x" + "0" * 40, market_id=market_id,
+            decimals=6, supply_apy=apy, utilization=0.5,
+            supply_cap_headroom_raw=None, tvl_usd=42_000_000.0,
+        )
+
+    now = time.time()
+    spike = _row("morpho_blue_market", "0xSPIKE", 0.167)
+    steady = _row("euler_v2", "0xSTEADY", 0.060)
+    history = {
+        "morpho_blue_market|8453|0xspike": [[now - h * 3600, 0.041] for h in (60, 48, 36, 24, 12)],
+        "euler_v2|8453|0xsteady": [[now - h * 3600, 0.060] for h in (60, 48, 36, 24, 12)],
+    }
+
+    ranked = sorted(
+        [spike, steady],
+        key=lambda r: rotation.effective_apy(r, history, now=now, persistence_hours=72)[0],
+        reverse=True,
+    )
+    assert ranked[0].market_id == "0xSTEADY", "deposit ranking still chases the spike"

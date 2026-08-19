@@ -1,6 +1,6 @@
 # Stablecoin Yield Rotator
 
-Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell — on Ethereum, Polygon, Base, Arbitrum, and HyperEVM — to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
+Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO/PYUSD) deposits across Aave V3, Morpho Blue markets, Morpho vaults, Euler V2, Hyperlend, and Moonwell — on Ethereum, Polygon, Base, Arbitrum, and HyperEVM — to chase the best risk-adjusted net APY, with gas-amortized hysteresis so you don't churn.
 
 ## Actions
 
@@ -10,7 +10,7 @@ Rotate stablecoin (USDC/USDT/DAI/USDS/USDe/GHO) deposits across Aave V3, Morpho 
 |---|---|---|
 | `scan` | — | Read-only. Ranked APY table for all (asset, venue, chain) tuples. |
 | `quote-rotation` | — | Read-only. Proposed deltas vs current positions; expected uplift, gas, payback days. |
-| `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI\|USDS\|USDE\|GHO>` | Initial deposit into the top-ranked venue for that asset. |
+| `deposit` | `--amount <float> --asset <USDC\|USDT\|DAI\|USDS\|USDE\|GHO\|PYUSD>` | Initial deposit into the top-ranked venue for that asset. |
 | `update` | `--confirm` | Re-quote + gas-check + execute. Without `--confirm`, emits the plan only (no broadcast). With `--confirm`, executes leg-by-leg, depositing the actual post-bridge balance delta on cross-chain legs. Halts on first revert. Idle wallet balances of configured stables (≥ 1 unit) are planned as 0%-APY deposit legs, so a fresh wallet bootstraps without a manual `deposit`. |
 | `auto-rotate` | — | Unattended `update --confirm` for runner scheduling. Emails a summary on executed rotations and on new failures (repeated identical halts alert once). No-ops are silent. |
 | `status` | — | Positions across all venues + USD totals + blended APY. |
@@ -101,9 +101,12 @@ service; dedupe state lives in `./.wayfinder/runner/job_state/`.
   current rate, so the path deliberately declines to chase a rate it has not seen hold —
   including a genuine step-up, which it only acts on once the new rate is over half the
   window. History is collected locally on each *fresh* scan (a cached scan is not
-  re-recorded), so a brand-new install has none: until a market has any history it must
-  clear **2× `min_apy_delta_bps`** to be rotated into. Expect the first few runs to be
-  more conservative than steady state.
+  re-recorded), and a market counts as observed only once it has **at least two** samples
+  inside the window — the scan records the current reading before the planner reads it, so
+  one sample is just this scan's own print. Until then a market must clear
+  **2× `min_apy_delta_bps`** to be rotated into. Expect the first couple of runs to be more
+  conservative than steady state. `deposit` uses the same ranking (without the warm-up
+  multiplier, since there is no incumbent to beat).
 - No borrow legs / leverage loops.
 - No yield-bearing stable wrappers (sUSDe, sDAI rebases) — base stables only. USDe is supported as a plain lend asset; note it carries Ethena protocol risk on top of venue risk.
 - SparkLend: read-only via this path. `SparkLendAdapter` exposes only borrow/repay (plus reads), no `lend`/`unlend`. Add `sparklend` back to `inputs/config.yaml` once the adapter exposes supply/withdraw — until then, rotations into/out of SparkLend are blocked at the dispatcher with `NotImplementedError`.

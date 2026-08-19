@@ -40,6 +40,7 @@ from rotation import (  # noqa: E402
     ApyHistory,
     RotationLeg,
     RotationPlan,
+    effective_apy,
     leg_to_dict,
     market_key,
     quote_rotation,
@@ -430,10 +431,23 @@ async def action_deposit(config: dict[str, Any], asset: str, human_amount: float
 
     scan_config = {**config, "assets": [asset]}
     scan = await _scan_all_cached(scan_config)
+    # Rank on the same persisted-APY basis as rotation, so a deposit can't be placed
+    # into a transient spike that the rotator would immediately decline to chase.
+    # No warm-up threshold here: a deposit has no incumbent to beat, it just picks
+    # the best-ranked venue.
+    deposit_history = _load_apy_history()
+    deposit_persistence_hours = _apy_persistence_hours(config)
+    now_ts = time.time()
+
+    def _ranked_apy(row: VenueRow) -> float:
+        return effective_apy(
+            row, deposit_history, now=now_ts, persistence_hours=deposit_persistence_hours
+        )[0]
+
     candidates = sorted(
         [r for r in scan if r.asset_symbol == asset and r.venue in EXECUTABLE_VENUES
          and not r.is_frozen and not r.is_paused],
-        key=lambda r: r.supply_apy,
+        key=_ranked_apy,
         reverse=True,
     )
     if not candidates:

@@ -32,6 +32,12 @@ DEFAULT_APY_PERSISTENCE_HOURS = 72.0
 # min_apy_delta_bps. Keeps the path useful during warm-up (and right after a new
 # market appears) without letting an unverified reading win on its first sighting.
 WARMUP_DELTA_MULTIPLIER = 2
+# How many recorded samples inside the window count as "we have observed this
+# market over time". Must be >1: the scan records the current reading *before* the
+# planner loads history, so a first-seen market always arrives holding exactly one
+# sample. Treating that as history let a first sighting skip the warm-up bar
+# entirely — the ranking rate was then just the instantaneous rate.
+MIN_HISTORY_SAMPLES = 2
 
 # market key -> [(unix_ts, supply_apy), ...]
 ApyHistory = dict[str, list[Any]]
@@ -207,7 +213,8 @@ def effective_apy(
     samples = apy_history.get(market_key(row.venue, row.chain_id, row.market_id)) or []
     cutoff = now - persistence_hours * 3600.0
     recent = [float(s[1]) for s in samples if len(s) >= 2 and float(s[0]) >= cutoff]
-    if not recent:
+    if len(recent) < MIN_HISTORY_SAMPLES:
+        # One sample is just this scan's own reading — not evidence of anything.
         return row.supply_apy, False
     return min(median(recent), row.supply_apy), True
 
