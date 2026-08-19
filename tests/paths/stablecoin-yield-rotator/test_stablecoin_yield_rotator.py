@@ -1917,3 +1917,65 @@ def test_deposit_ranks_on_persisted_apy_not_the_spike(tmp_path, monkeypatch):
         reverse=True,
     )
     assert ranked[0].market_id == "0xSTEADY", "deposit ranking still chases the spike"
+
+
+@pytest.mark.asyncio
+async def test_euler_row_read_failure_is_recorded_not_swallowed():
+    """A failed per-vault read must surface as a scan failure. It used to be logged
+    and skipped, so the vault vanished while status stayed "ok" / failure_count 0 —
+    ranking then ran against incomplete discovery."""
+    from venues import PartialVenueScan, _scan_euler_v2
+
+    class _Adapter:
+        async def get_vault_info_full(self, *, chain_id, vault):
+            if vault == "0xBAD":
+                return False, "Cannot connect to host strategies.wayfinder.ai:443"
+            return True, {
+                "assetSymbol": "USDC", "asset": "0x" + "0" * 40,
+                "totalCash": 1_000_000, "totalBorrowed": 500_000, "assetDecimals": 6,
+            }
+
+    discovered = {
+        "0xGOOD": {"vault": "0xGOOD", "symbol": "USDC", "apy": 0.05, "tvl_usd": 1e6},
+        "0xBAD": {"vault": "0xBAD", "symbol": "USDC", "apy": 0.09, "tvl_usd": 1e6},
+    }
+    with patch("venues._euler_stable_vaults", AsyncMock(return_value=discovered)):
+        with pytest.raises(PartialVenueScan) as excinfo:
+            await _scan_euler_v2(_Adapter(), 1, {"USDC"})
+
+    partial = excinfo.value
+    # The good vault is preserved, the bad one is reported rather than dropped.
+    assert [r.market_id for r in partial.rows] == ["0xGOOD"]
+    assert len(partial.failures) == 1 and "0xBAD" in partial.failures[0]
+
+
+@pytest.mark.asyncio
+async def test_scan_all_surfaces_partial_rows_and_refuses_in_strict_mode():
+    """scan_all keeps the surviving rows, records the lost ones as failures, and
+    strict mode refuses the scan — same treatment as a whole-venue failure."""
+    from venues import DiscoveryError, PartialVenueScan, VenueRow
+
+    good = VenueRow(
+        venue="euler_v2", chain_id=1, asset_symbol="USDC",
+        asset_address="0x" + "0" * 40, market_id="0xGOOD", decimals=6,
+        supply_apy=0.05, utilization=0.5, supply_cap_headroom_raw=None, tvl_usd=1e6,
+    )
+
+    async def _partial(_adapter, _chain_id, _allowed):
+        raise PartialVenueScan([good], ["euler get_vault_info_full failed for 0xBAD: boom"])
+
+    with patch.dict("venues._SCAN_FNS", {"euler_v2": _partial}, clear=False), \
+         patch("venues.get_read_adapter", AsyncMock(return_value=object())):
+        failures: list[dict] = []
+        rows = await rotator.scan_all(
+            venues=["euler_v2"], chains=[1], assets=["USDC"],
+            strict=False, failure_log=failures,
+        )
+        assert [r.market_id for r in rows] == ["0xGOOD"]
+        assert len(failures) == 1 and failures[0]["venue"] == "euler_v2"
+        assert "0xBAD" in failures[0]["error"]
+
+        with pytest.raises(DiscoveryError):
+            await rotator.scan_all(
+                venues=["euler_v2"], chains=[1], assets=["USDC"], strict=True,
+            )

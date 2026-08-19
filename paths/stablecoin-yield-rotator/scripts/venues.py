@@ -518,10 +518,15 @@ async def _scan_euler_v2(adapter: EulerV2Adapter, chain_id: int, allowed: set[st
     if not discovered:
         return []
 
+    read_failures: list[str] = []
+
     async def _row(vault: str, meta: dict[str, Any]) -> VenueRow | None:
         ok, info = await adapter.get_vault_info_full(chain_id=chain_id, vault=vault)
         if not ok or not isinstance(info, dict):
+            # A failed read, not a filtered-out market. Record it — returning None here
+            # silently dropped the vault while the scan still reported status "ok".
             logger.warning(f"euler get_vault_info_full failed for {vault} on chain {chain_id}: {info}")
+            read_failures.append(f"euler get_vault_info_full failed for {vault}: {info}")
             return None
         if not _matches_asset(info.get("assetSymbol"), allowed):
             return None
@@ -547,7 +552,10 @@ async def _scan_euler_v2(adapter: EulerV2Adapter, chain_id: int, allowed: set[st
         )
 
     rows = await asyncio.gather(*[_row(v, m) for v, m in discovered.items()])
-    return [r for r in rows if r is not None]
+    kept = [r for r in rows if r is not None]
+    if read_failures:
+        raise PartialVenueScan(kept, read_failures)
+    return kept
 
 
 async def _euler_positions(adapter: EulerV2Adapter, chain_id: int, allowed: set[str], account: str) -> list[Position]:
@@ -874,6 +882,23 @@ class DiscoveryError(RuntimeError):
     """Raised when a (venue, chain) read fails in strict mode."""
 
 
+class PartialVenueScan(Exception):
+    """A venue scan that produced rows but lost some of them to per-item read errors.
+
+    Raised instead of quietly returning the survivors: a per-vault/per-market failure
+    used to be logged and skipped, so the market vanished from the scan while
+    `status` stayed "ok" and `failure_count` stayed 0. Callers then ranked against
+    incomplete discovery, and a snapshot built from it understated venue coverage.
+    `scan_all` keeps `rows` and records `failures` like any other scan failure — and
+    in strict mode refuses the scan outright, same as a whole-venue failure.
+    """
+
+    def __init__(self, rows: list[VenueRow], failures: list[str]):
+        super().__init__(f"{len(failures)} row read(s) failed")
+        self.rows = rows
+        self.failures = failures
+
+
 async def scan_all(
     venues: list[str],
     chains: list[int],
@@ -922,6 +947,15 @@ async def scan_all(
     for venue, chain_id, task in tasks:
         try:
             rows.extend(await task)
+        except PartialVenueScan as partial:
+            # Keep what the venue did return, but record every lost row so the scan
+            # can't report "ok" while markets are missing (and strict mode refuses it).
+            rows.extend(partial.rows)
+            for err in partial.failures:
+                failures.append({"venue": venue, "chain_id": chain_id, "error": err})
+            logger.warning(
+                f"partial scan for {venue}/{chain_id}: {len(partial.failures)} row read(s) failed"
+            )
         except Exception as exc:  # noqa: BLE001
             failures.append({"venue": venue, "chain_id": chain_id, "error": str(exc)})
             logger.warning(f"scan failed for {venue}/{chain_id}: {exc}")

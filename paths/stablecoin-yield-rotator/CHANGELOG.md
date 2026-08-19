@@ -33,6 +33,15 @@ conservative ranker.
 
 ### Fixed
 
+- **Euler vault reads were dropped silently, and the scan still reported success.** A
+  failed `get_vault_info_full` for one vault was logged and skipped, so the market
+  disappeared from the results while `status` stayed `"ok"` and `failure_count` stayed
+  `0` — indistinguishable from a market that was filtered out on purpose. Ranking then
+  ran against incomplete discovery, and a snapshot built from such a scan understated
+  venue coverage (found while rebuilding the applet: a scan reporting 0 failures had
+  quietly lost 8 Euler vaults). Per-row read failures now raise `PartialVenueScan`, which
+  `scan_all` unpacks — surviving rows are kept, every lost row is recorded as a failure,
+  and `strict=True` refuses the scan exactly as it does for a whole-venue failure.
 - **`_matches_asset` never matched its normalized branch.** It compared the lower-case
   output of `normalize_symbol()` against an upper-case allow-set, so that branch always
   fell through — which also made the ₮→T translation dead code and left HyperEVM's
