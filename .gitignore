@@ -76,3 +76,6 @@ examples/paths/
 
 # Ledger
 .ledger/
+
+# Generated scan snapshots written by path runs (excluded from bundles too)
+.scan_cache/
